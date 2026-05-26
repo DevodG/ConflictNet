@@ -84,9 +84,9 @@ def sweep_threshold(
             elif tp.sum() == 0:
                 type_f1s.append(0.0)
             else:
-                type_f1s.append(f1_score(labels_type[:, t], tp, zero_division=0))  # type: ignore
+                type_f1s.append(f1_score(labels_type[:, t], tp, zero_division=0.0))  # type: ignore
         macro_f1_list.append(float(np.mean(type_f1s)))
-        binary_f1_list.append(float(f1_score(binary_true, binary_pred, zero_division=0)))  # type: ignore
+        binary_f1_list.append(float(f1_score(binary_true, binary_pred, zero_division=0.0)))  # type: ignore
 
     return {
         "thresholds": np.array(thresholds_list),
@@ -242,7 +242,7 @@ def plot_reliability_diagram(
     # ── Left panel: Reliability diagram ──────────────────────────────
     ax1.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.6, label="Perfect calibration")
 
-    colors = plt.cm.tab10(np.linspace(0, 1, n_types + 1))  # +1 for binary
+    colors = plt.cm.tab10(np.linspace(0, 1, n_types + 1))  # type: ignore[attr-defined]
 
     # Binary (any-type) reliability
     binary_true = labels_type.any(axis=1).astype(int)

@@ -46,7 +46,7 @@ def fairness_audit(
         from sklearn.metrics import f1_score  # type: ignore
 
         if metric_fn is None:
-            metric_fn = lambda y, p: f1_score(y, p, zero_division=0)
+            metric_fn = lambda y, p: f1_score(y, p, zero_division=0.0)
 
         mf = MetricFrame(
             metrics={"f1": metric_fn},
@@ -63,8 +63,8 @@ def fairness_audit(
         )
 
         by_group = mf.by_group.to_dict()
-        overall = float(mf.overall["f1"])
-        disparity = float(mf.difference()["f1"])
+        overall = float(mf.overall["f1"])  # type: ignore[arg-type]
+        disparity = float(mf.difference()["f1"])  # type: ignore[arg-type]
 
         return {
             "overall_f1": overall,
@@ -83,11 +83,11 @@ def fairness_audit(
         for g in groups:
             mask = np.array(sensitive_features) == g
             if mask.sum() > 0:
-                by_group[g] = f1_score(y_true[mask], y_pred[mask], zero_division=0)
+                by_group[g] = f1_score(y_true[mask], y_pred[mask], zero_division=0.0)
 
         values = list(by_group.values())
         return {
-            "overall_f1": f1_score(y_true, y_pred, zero_division=0),
+            "overall_f1": f1_score(y_true, y_pred, zero_division=0.0),
             "by_group": by_group,
             "disparity": max(values) - min(values) if len(values) >= 2 else 0.0,
             "demographic_parity_difference": None,

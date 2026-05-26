@@ -106,7 +106,7 @@ def export_human_eval_csv(
 
     n_types = len(type_names)
     rows: List[Dict[str, Any]] = []
-    n = min(n_samples, len(dataset))
+    n = min(n_samples, len(dataset))  # type: ignore[arg-type]
 
     for i in range(n):
         try:

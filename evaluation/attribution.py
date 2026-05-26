@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 # Fix for macOS OpenMP multiple initialization error
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -40,22 +40,19 @@ class _TextWrapper(nn.Module):
     ) -> torch.Tensor:
         # Replace normal embedding lookup with pre-computed embeddings
         # Access DeBERTa's embedding layer
-        deberta = self.model.text_encoder.encoder
-        # Get position/token type embeddings normally
-        position_ids = torch.arange(input_embeds.size(1), device=input_embeds.device).unsqueeze(0)
-
+        deberta: Any = self.model.text_encoder  # type: ignore[union-attr]
         # Call deberta forward with inputs_embeds instead of input_ids
-        text_raw = deberta(
+        text_raw = deberta.encoder(
             inputs_embeds=input_embeds,
             attention_mask=attention_mask,
         ).last_hidden_state[:, 0, :]  # [CLS]
 
-        text_embed = self.model.text_proj(text_raw)
-        audio_raw = self.model.audio_encoder(audio)
-        audio_embed = self.model.audio_proj(audio_raw)
+        text_embed: Any = self.model.text_proj(text_raw)  # type: ignore[union-attr]
+        audio_raw: Any = self.model.audio_encoder(audio)  # type: ignore[union-attr]
+        audio_embed: Any = self.model.audio_proj(audio_raw)  # type: ignore[union-attr]
         speaker_feat = torch.zeros_like(audio_embed)
-        fused = self.model.fuse(audio_embed, text_embed, speaker_feat)
-        logits, _, _, _ = self.model.classifier(fused)
+        fused: Any = self.model.fuse(audio_embed, text_embed, speaker_feat)  # type: ignore[union-attr]
+        logits, _, _, _ = self.model.classifier(fused)  # type: ignore[union-attr]
         return logits.sum(dim=-1)  # scalar per batch item
 
 
@@ -72,13 +69,13 @@ class _AudioWrapper(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        audio_raw = self.model.audio_encoder(audio)
-        audio_embed = self.model.audio_proj(audio_raw)
-        text_raw = self.model.text_encoder(input_ids, attention_mask)
-        text_embed = self.model.text_proj(text_raw)
+        audio_raw: Any = self.model.audio_encoder(audio)  # type: ignore[union-attr]
+        audio_embed: Any = self.model.audio_proj(audio_raw)  # type: ignore[union-attr]
+        text_raw: Any = self.model.text_encoder(input_ids, attention_mask)  # type: ignore[union-attr]
+        text_embed: Any = self.model.text_proj(text_raw)  # type: ignore[union-attr]
         speaker_feat = torch.zeros_like(audio_embed)
-        fused = self.model.fuse(audio_embed, text_embed, speaker_feat)
-        logits, _, _, _ = self.model.classifier(fused)
+        fused: Any = self.model.fuse(audio_embed, text_embed, speaker_feat)  # type: ignore[union-attr]
+        logits, _, _, _ = self.model.classifier(fused)  # type: ignore[union-attr]
         return logits.sum(dim=-1)
 
 
@@ -121,8 +118,8 @@ class ConflictNetAttribution:
 
         # Get input embeddings from DeBERTa embedding layer
         with torch.no_grad():
-            deberta = self.model.text_encoder.encoder
-            input_embeds = deberta.get_input_embeddings()(input_ids)  # (B, L, H)
+            deberta: Any = self.model.text_encoder  # type: ignore[union-attr]
+            input_embeds = deberta.encoder.get_input_embeddings()(input_ids)  # (B, L, H)
 
         ig = self._ig(self._text_wrapper)
 
