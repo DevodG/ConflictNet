@@ -39,6 +39,7 @@ def classify_utterance(
     transcript: str,
     client,
     model: str = "gpt-4o",
+    max_tokens: int = 256,
     max_retries: int = 3,
 ) -> Optional[Dict]:
     """Classify a single utterance using GPT-4o."""
@@ -51,6 +52,7 @@ def classify_utterance(
                     {"role": "user", "content": f'Utterance: "{transcript}"'},
                 ],
                 temperature=0.0,
+                max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
             result = json.loads(response.choices[0].message.content)
