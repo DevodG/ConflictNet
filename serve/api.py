@@ -119,7 +119,7 @@ def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
 
         try:
             results = serve_model.predict_batch(items)
-            return PredictBatchResponse(results=results)
+            return PredictBatchResponse(results=results)  # type: ignore[arg-type]
         except Exception as e:
             logger.exception("Batch prediction failed")
             raise HTTPException(status_code=500, detail=str(e))

@@ -60,8 +60,8 @@ def extract_prosody_stats(
         import librosa  # type: ignore
         f0, voiced_flag, _ = librosa.pyin(
             audio_np.astype(np.float32),
-            fmin=librosa.note_to_hz("C2"),
-            fmax=librosa.note_to_hz("C7"),
+            fmin=float(librosa.note_to_hz("C2")),
+            fmax=float(librosa.note_to_hz("C7")),
             sr=sr,
         )
         f0_voiced = f0[voiced_flag]

@@ -869,8 +869,7 @@ class TestHumanEval:
 
     def test_compute_annotator_agreement_with_csv(self):
         pandas = pytest.importorskip("pandas", reason="pandas required for annotator agreement")
-        from sklearn.metrics import cohen_kappa_score
-        assert cohen_kappa_score is not None
+        pytest.importorskip("sklearn", reason="scikit-learn required for annotator agreement")
         from evaluation.human_eval import compute_annotator_agreement
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f1:
             f1.write("sarcasm,suppression,deception,conflict_flag\n")

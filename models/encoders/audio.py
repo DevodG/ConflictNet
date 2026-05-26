@@ -7,7 +7,7 @@ All encoders accept an optional attention_mask for padded audio.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -23,7 +23,7 @@ class Wav2Vec2Encoder(nn.Module):
     def __init__(self, model_name: str = "facebook/wav2vec2-large-960h", freeze: bool = True):
         super().__init__()
         self.encoder = Wav2Vec2Model.from_pretrained(model_name)
-        self.output_dim = self.encoder.config.hidden_size  # 1024
+        self.output_dim: int = self.encoder.config.hidden_size  # 1024
         if freeze:
             for p in self.encoder.parameters():
                 p.requires_grad = False
@@ -31,7 +31,7 @@ class Wav2Vec2Encoder(nn.Module):
     def forward(
         self, audio: torch.Tensor, attention_mask: Optional[torch.Tensor] = None,
         return_frames: bool = False,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         out = self.encoder(audio, attention_mask=attention_mask)
         hs = out.last_hidden_state  # (B, T, D)
         if attention_mask is not None:
@@ -50,7 +50,7 @@ class WavLMEncoder(nn.Module):
     def __init__(self, model_name: str = "microsoft/wavlm-large", freeze: bool = True):
         super().__init__()
         self.encoder = WavLMModel.from_pretrained(model_name)
-        self.output_dim = self.encoder.config.hidden_size  # 1024
+        self.output_dim: int = self.encoder.config.hidden_size  # 1024
         if freeze:
             for p in self.encoder.parameters():
                 p.requires_grad = False
@@ -58,7 +58,7 @@ class WavLMEncoder(nn.Module):
     def forward(
         self, audio: torch.Tensor, attention_mask: Optional[torch.Tensor] = None,
         return_frames: bool = False,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         out = self.encoder(audio, attention_mask=attention_mask)
         hs = out.last_hidden_state  # (B, T, D)
         if attention_mask is not None:
@@ -116,14 +116,14 @@ class Emotion2VecEncoder(nn.Module):
     def forward(
         self, audio: torch.Tensor, attention_mask: Optional[torch.Tensor] = None,
         return_frames: bool = False,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | Tuple[torch.Tensor, Optional[torch.Tensor]]:
         assert self._model is not None, "self._model is not initialized"
         if self._backend == "funasr":
             pooled = self._forward_funasr(audio)
             if return_frames:
                 return pooled, None
             return pooled
-        result = self._model(audio, attention_mask=attention_mask, return_frames=return_frames)
+        result = self._model(audio, attention_mask=attention_mask, return_frames=return_frames)  # type: ignore[operator]
         if return_frames:
             return result  # already (pooled, frames) tuple
         return result
@@ -135,7 +135,7 @@ class Emotion2VecEncoder(nn.Module):
         # funasr AutoModel.generate returns list of dicts
         # Key depends on model config: 'feats', 'feature', 'embeddings', etc.
         assert self._model is not None, "self._model is not initialized"
-        results = self._model.generate(
+        results = self._model.generate(  # type: ignore[union-attr]
             audio_np_list,
             output_dir=False,
             granularity="utterance",
@@ -195,9 +195,9 @@ class Emotion2VecEncoder(nn.Module):
     @property
     def device(self) -> torch.device:
         if self._backend == "funasr" and self._model is not None and hasattr(self._model, "device"):
-            return self._model.device
+            return self._model.device  # type: ignore[union-attr]
         assert self._model is not None, "self._model is not initialized"
-        return next(self._model.parameters()).device if self._backend == "fallback" else torch.device("cpu")
+        return next(self._model.parameters()).device if self._backend == "fallback" else torch.device("cpu")  # type: ignore[union-attr]
 
 
 def build_audio_encoder(name: str = "emotion2vec", **kwargs) -> nn.Module:

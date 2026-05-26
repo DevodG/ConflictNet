@@ -45,7 +45,8 @@ def classify_utterance(
     """Classify a single utterance using GPT-4o."""
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
+            create_fn = getattr(client.chat.completions, "create")
+            response = create_fn(
                 model=model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -55,7 +56,11 @@ def classify_utterance(
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
-            result = json.loads(response.choices[0].message.content)
+            message = response.choices[0].message
+            refusal = getattr(message, "refusal", None)
+            if refusal and isinstance(refusal, str):
+                raise Exception(f"Model refused request: {refusal}")
+            result = json.loads(message.content)
             return result
         except Exception as e:
             if attempt < max_retries - 1:

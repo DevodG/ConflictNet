@@ -62,7 +62,8 @@ def fairness_audit(
             y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
         )
 
-        by_group = mf.by_group.to_dict()
+        by_group_raw = mf.by_group.to_dict()
+        by_group = by_group_raw.get("f1", by_group_raw)
         overall = float(mf.overall["f1"])  # type: ignore[arg-type]
         disparity = float(mf.difference()["f1"])  # type: ignore[arg-type]
 

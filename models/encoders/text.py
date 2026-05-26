@@ -1,5 +1,7 @@
 """Text encoder: DeBERTa-v3-large with optional LoRA."""
 
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoTokenizer
@@ -33,7 +35,7 @@ class DeBERTaEncoder(nn.Module):
                 lora_dropout=0.05,
                 bias="none",
             )
-            self.encoder = get_peft_model(self.encoder, config)
+            self.encoder = get_peft_model(self.encoder, config)  # type: ignore[arg-type]
             trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
             total = sum(p.numel() for p in self.encoder.parameters())
             print(f"[LoRA] Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
@@ -45,7 +47,7 @@ class DeBERTaEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         return_tokens: bool = False,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         out = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         pooled = out.last_hidden_state[:, 0, :]  # (B, hidden_size) [CLS]
         if return_tokens:

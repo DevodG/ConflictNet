@@ -136,8 +136,8 @@ def verify_onnx(onnx_path: str, device: str = "cpu"):
 
     dummy_audio = torch.randn(1, 160000).numpy()
     dummy_input_ids = torch.randint(0, 100, (1, 512)).numpy()
-    dummy_attn_mask = torch.ones((1, 512), dtype="int64")
-    dummy_audio_attn = torch.ones((1, 160000), dtype="bool").numpy()
+    dummy_attn_mask = torch.ones((1, 512), dtype=torch.int64)
+    dummy_audio_attn = torch.ones((1, 160000), dtype=torch.bool).numpy()
     dummy_prosody = torch.zeros((1, 3)).numpy()
 
     outputs = session.run(

@@ -28,6 +28,7 @@ Thumbs.db
 
 # Models / checkpoints
 checkpoints/
+pretrained_models/
 *.pt
 *.pth
 *.safetensors

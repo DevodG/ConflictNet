@@ -154,7 +154,7 @@ class ServeModel:
 
     def _tokenize(self, text: str) -> Tuple[torch.Tensor, torch.Tensor]:
         assert self.tokenizer is not None
-        enc = self.tokenizer(
+        enc = self.tokenizer(  # type: ignore[operator]
             text,
             max_length=self.cfg.max_text_len,
             truncation=True,

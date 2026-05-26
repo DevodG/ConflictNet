@@ -70,7 +70,7 @@ def tokenize(
     max_len: int = MAX_TEXT_LEN,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Tokenize text, return (input_ids, attention_mask)."""
-    enc = tokenizer(
+    enc = tokenizer(  # type: ignore[operator]
         text,
         max_length=max_len,
         truncation=True,
@@ -104,7 +104,7 @@ def compute_token_word_boundaries(
         List of ``(token_start_idx, token_end_idx)`` per word.
         Empty list if tokenization yields no content tokens.
     """
-    enc = tokenizer(
+    enc = tokenizer(  # type: ignore[operator]
         text,
         max_length=max_len,
         truncation=True,
@@ -995,7 +995,7 @@ class GoEmotionsDataset(Dataset):
         for i, example in enumerate(ds):
             if max_samples is not None and i >= max_samples:
                 break
-            text = example.get("text", "").strip()
+            text = example.get("text", "").strip()  # type: ignore[attr-defined]
             if not text:
                 continue
             items.append({

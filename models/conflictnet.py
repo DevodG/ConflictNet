@@ -208,8 +208,8 @@ class ConflictNet(nn.Module):
         text_enc_dim = self.text_encoder.output_dim
 
         # 2. Projection heads → shared space
-        self.audio_proj = ProjectionHead(input_dim=audio_enc_dim, embed_dim=embed_dim)
-        self.text_proj = ProjectionHead(input_dim=text_enc_dim, embed_dim=embed_dim)
+        self.audio_proj = ProjectionHead(input_dim=int(audio_enc_dim), embed_dim=embed_dim)  # type: ignore[arg-type]
+        self.text_proj = ProjectionHead(input_dim=int(text_enc_dim), embed_dim=embed_dim)  # type: ignore[arg-type]
 
         # 3. Speaker normalization (baseline-subtract is an ablation flag)
         self.speaker_norm = SpeakerNormalizer(
