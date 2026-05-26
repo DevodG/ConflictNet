@@ -318,7 +318,7 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (50, 3))
         fig = plot_reliability_diagram(probs, labels)
         assert fig is not None
-        plt.close()
+        plt.close()  # type: ignore[possibly-undefined]
 
     def test_plot_reliability_diagram_saves_file(self):
         """Should save plot to disk when save_path is provided."""
@@ -336,7 +336,7 @@ class TestCalibration:
         try:
             fig = plot_reliability_diagram(probs, labels, save_path=tmp_path)
             assert fig is not None
-            plt.close()
+            plt.close()  # type: ignore[possibly-undefined]
             assert os.path.exists(tmp_path)
             assert os.path.getsize(tmp_path) > 0
         finally:
@@ -356,7 +356,7 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (50, 1))
         fig = plot_reliability_diagram(probs, labels, type_names=["sarcasm"])
         assert fig is not None
-        plt.close()
+        plt.close()  # type: ignore[possibly-undefined]
 
     def test_plot_reliability_diagram_all_same_label(self):
         """Should handle degenerate case where all labels are the same."""
@@ -371,7 +371,7 @@ class TestCalibration:
         labels = np.zeros((50, 3), dtype=int)  # all negative
         fig = plot_reliability_diagram(probs, labels)
         assert fig is not None
-        plt.close()
+        plt.close()  # type: ignore[possibly-undefined]
 
     def test_plot_reliability_diagram_custom_figsize(self):
         """Should accept custom figsize."""
@@ -386,10 +386,10 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (30, 2))
         fig = plot_reliability_diagram(probs, labels, figsize=(16, 6))
         assert fig is not None
-        assert isinstance(fig, plt.Figure)
+        assert isinstance(fig, plt.Figure)  # type: ignore[possibly-undefined]
         size = fig.get_size_inches()
         assert size[0] == 16
-        plt.close()
+        plt.close()  # type: ignore[possibly-undefined]
 
 
 # ============================================================================
@@ -403,7 +403,7 @@ class MockLatencyModel(nn.Module):
         self.fc = nn.Sequential(nn.Linear(100, 64), nn.ReLU(), nn.Linear(64, 3))
 
     def forward(self, **kwargs) -> Any:
-        audio = kwargs.get("audio", torch.randn(1, 100))
+        audio: torch.Tensor = kwargs.get("audio", torch.randn(1, 100))
         B = audio.shape[0]
         features = audio.mean(dim=-1, keepdim=True).expand(-1, 100)
         logits = self.fc(features)
@@ -608,12 +608,15 @@ class TestLLMBaseline:
     def test_classify_utterance_parses_json(self):
         from evaluation.llm_baseline import classify_utterance
         client = MagicMock()
-        client.chat.completions.create.return_value.choices[0].message.content = json.dumps({
+        message_mock = MagicMock()
+        message_mock.content = json.dumps({
             "conflict": True,
             "types": {"sarcasm": 1, "suppression": 0, "deception": 1},
             "severity": 0.7,
             "reasoning": "test",
         })
+        message_mock.refusal = None
+        client.chat.completions.create.return_value.choices = [MagicMock(message=message_mock)]
         result = classify_utterance("test text", client, model="gpt-4o")
         assert result is not None
         assert result["conflict"] is True
@@ -623,14 +626,27 @@ class TestLLMBaseline:
     def test_classify_utterance_no_conflict(self):
         from evaluation.llm_baseline import classify_utterance
         client = MagicMock()
-        client.chat.completions.create.return_value.choices[0].message.content = json.dumps({
+        message_mock = MagicMock()
+        message_mock.content = json.dumps({
             "conflict": False,
             "types": {"sarcasm": 0, "suppression": 0, "deception": 0},
             "severity": 0.0,
         })
+        message_mock.refusal = None
+        client.chat.completions.create.return_value.choices = [MagicMock(message=message_mock)]
         result = classify_utterance("normal statement", client)
         assert result is not None
         assert result["conflict"] is False
+
+    def test_classify_utterance_refusal(self):
+        from evaluation.llm_baseline import classify_utterance
+        client = MagicMock()
+        message_mock = MagicMock()
+        message_mock.refusal = "I cannot fulfill this request."
+        message_mock.content = None
+        client.chat.completions.create.return_value.choices = [MagicMock(message=message_mock)]
+        result = classify_utterance("some text", client, max_retries=1)
+        assert result is None
 
     def test_classify_utterance_retry_on_error(self):
         from evaluation.llm_baseline import classify_utterance
@@ -853,7 +869,8 @@ class TestHumanEval:
 
     def test_compute_annotator_agreement_with_csv(self):
         pandas = pytest.importorskip("pandas", reason="pandas required for annotator agreement")
-        from sklearn.metrics import cohen_kappa_score as _
+        from sklearn.metrics import cohen_kappa_score
+        assert cohen_kappa_score is not None
         from evaluation.human_eval import compute_annotator_agreement
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f1:
             f1.write("sarcasm,suppression,deception,conflict_flag\n")
