@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset
 
 
 # ============================================================================
@@ -317,7 +318,7 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (50, 3))
         fig = plot_reliability_diagram(probs, labels)
         assert fig is not None
-        plt.close(fig)
+        plt.close()
 
     def test_plot_reliability_diagram_saves_file(self):
         """Should save plot to disk when save_path is provided."""
@@ -335,7 +336,7 @@ class TestCalibration:
         try:
             fig = plot_reliability_diagram(probs, labels, save_path=tmp_path)
             assert fig is not None
-            plt.close(fig)
+            plt.close()
             assert os.path.exists(tmp_path)
             assert os.path.getsize(tmp_path) > 0
         finally:
@@ -355,7 +356,7 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (50, 1))
         fig = plot_reliability_diagram(probs, labels, type_names=["sarcasm"])
         assert fig is not None
-        plt.close(fig)
+        plt.close()
 
     def test_plot_reliability_diagram_all_same_label(self):
         """Should handle degenerate case where all labels are the same."""
@@ -370,7 +371,7 @@ class TestCalibration:
         labels = np.zeros((50, 3), dtype=int)  # all negative
         fig = plot_reliability_diagram(probs, labels)
         assert fig is not None
-        plt.close(fig)
+        plt.close()
 
     def test_plot_reliability_diagram_custom_figsize(self):
         """Should accept custom figsize."""
@@ -385,9 +386,10 @@ class TestCalibration:
         labels = np.random.randint(0, 2, (30, 2))
         fig = plot_reliability_diagram(probs, labels, figsize=(16, 6))
         assert fig is not None
+        assert isinstance(fig, plt.Figure)
         size = fig.get_size_inches()
         assert size[0] == 16
-        plt.close(fig)
+        plt.close()
 
 
 # ============================================================================
@@ -481,6 +483,7 @@ class _DummyInnerEncoder(nn.Module):
         if inputs_embeds is not None:
             B, L, H = inputs_embeds.shape
         else:
+            assert input_ids is not None
             B, L = input_ids.shape
             H = 1024
         hs = torch.randn(B, L, H)
@@ -658,7 +661,7 @@ class TestLLMBaseline:
         # Ensure the module-level import from evaluation.llm_baseline is resolved
         import evaluation.llm_baseline as llm_mod
         # Re-chache to pick up the mock
-        llm_mod.openai = openai_mock
+        setattr(llm_mod, "openai", openai_mock)
 
         from evaluation.llm_baseline import run_llm_baseline
         test_items = [
@@ -687,7 +690,7 @@ class TestLLMBaseline:
         if "openai" not in sys.modules:
             sys.modules["openai"] = MagicMock()
         import evaluation.llm_baseline as llm_mod
-        llm_mod.openai = sys.modules["openai"]
+        setattr(llm_mod, "openai", sys.modules["openai"])
 
         from evaluation.llm_baseline import run_llm_baseline
         test_items = [{"text": f"utt {i}", "conflict_binary": 0, "conflict_type_labels": [0, 0, 0]}
@@ -737,7 +740,7 @@ class MockHumanEvalModel(nn.Module):
         return self.forward(*args, **kwargs)
 
 
-class MockDataset:
+class MockDataset(Dataset):
     """Minimal dataset returning synthetic samples."""
     def __init__(self, n=10, n_types=3):
         self.n = n
