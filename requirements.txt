@@ -18,10 +18,14 @@ funasr  # Emotion2Vec backend (optional — falls back to wav2vec2 if absent)
 safetensors>=0.4  # secure, pickle-free tensor serialization
 pytest>=7.0  # test suite
 
+# Dev / CI
+ruff>=0.5
+
 # Serving (Phase 3)
 fastapi>=0.109
 uvicorn[standard]>=0.27
 pydantic>=2.5
+python-multipart>=0.0.9
 
 # ONNX export (optional)
 onnx>=1.15
