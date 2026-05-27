@@ -18,12 +18,12 @@ import torch
 from torch.utils.data import Dataset
 
 try:
-    import pandas as pd
+    import pandas as pd  # type: ignore
 except ImportError:
     pd = None
 
 try:
-    from sklearn.metrics import cohen_kappa_score
+    from sklearn.metrics import cohen_kappa_score  # type: ignore
 except ImportError:
     cohen_kappa_score = None
 
@@ -66,11 +66,11 @@ class AnnotationSchema:
             self.sample_id,
             self.audio_path,
             self.transcript,
-            "" if self.sarcasm is None else int(self.sarcasm),
-            "" if self.suppression is None else int(self.suppression),
-            "" if self.deception is None else int(self.deception),
-            "" if self.severity is None else int(self.severity),
-            "" if self.conflict_flag is None else int(self.conflict_flag),
+            "" if self.sarcasm is None else self.sarcasm,
+            "" if self.suppression is None else self.suppression,
+            "" if self.deception is None else self.deception,
+            "" if self.severity is None else self.severity,
+            "" if self.conflict_flag is None else self.conflict_flag,
         ]
 
 
@@ -198,7 +198,7 @@ def compute_annotator_agreement(
                 agreements[col] = float("nan")
                 continue
             kappa = cohen_kappa_score(df1[col][valid], df2[col][valid])
-            agreements[col] = round(float(kappa), 4)
+            agreements[col] = round(kappa, 4)
 
     avg = np.mean([v for v in agreements.values() if not np.isnan(v)])
     agreements["average_kappa"] = round(float(avg), 4)
