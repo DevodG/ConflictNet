@@ -111,8 +111,12 @@ def main():
         sample_rate=16000,
         musan_path=getattr(args, "musan_path", None),
     )
-    train_collate = make_collate_fn(augmentor=augmentor, prosody_lookup=prosody_lookup)  # augment on
-    val_collate = make_collate_fn(prosody_lookup=prosody_lookup)                        # augment off
+    # Both collate fns use the SAME prosody lookup (z-scores computed from
+    # training-data-only speaker statistics by compute_prosody_stats.py).
+    # This is CORRECT — val utterances get z-scores based on training speaker
+    # statistics, preventing data leakage across splits.
+    train_collate = make_collate_fn(augmentor=augmentor, prosody_lookup=prosody_lookup)
+    val_collate = make_collate_fn(prosody_lookup=prosody_lookup)
 
     train_datasets = []
     val_datasets = []

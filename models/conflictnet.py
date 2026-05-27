@@ -18,8 +18,6 @@ import dataclasses
 import logging
 from typing import Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,6 +28,8 @@ from .temporal import TransformerTemporalContext
 from .alignment import ProjectionHead, ContextGatedContrastiveLoss, CrossModalAttention
 from .alignment.word_divergence import WordLevelDivergence
 from .classifier import ConflictClassifier
+
+logger = logging.getLogger(__name__)
 
 
 

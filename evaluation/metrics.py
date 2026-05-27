@@ -15,7 +15,6 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Any
 
 import numpy as np
-import torch
 from sklearn.metrics import (  # type: ignore
     accuracy_score,
     average_precision_score,

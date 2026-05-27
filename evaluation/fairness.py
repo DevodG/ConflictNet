@@ -46,7 +46,8 @@ def fairness_audit(
         from sklearn.metrics import f1_score  # type: ignore
 
         if metric_fn is None:
-            metric_fn = lambda y, p: f1_score(y, p, zero_division=0.0)  # type: ignore[arg-type]
+            def metric_fn(y, p):
+                return f1_score(y, p, zero_division=0.0)
 
         mf = MetricFrame(
             metrics={"f1": metric_fn},

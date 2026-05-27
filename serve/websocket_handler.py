@@ -8,9 +8,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-import torch
 from fastapi import WebSocket, WebSocketDisconnect
 
 from serve.config import ServeConfig

@@ -29,7 +29,6 @@ import logging
 import os
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -162,16 +161,37 @@ def evaluate_on_dataset(
 
 
 def load_model(checkpoint_path: str, device: str) -> torch.nn.Module:
-    """Load a trained ConflictNet from checkpoint."""
+    """Load a trained ConflictNet from checkpoint.
+
+    Reads architecture config from the sidecar ``_meta.json`` file
+    (not from the safetensors weight dict, which contains no config keys).
+    """
+    import json as _json
+    from pathlib import Path as _Path
     from models.conflictnet import ConflictNet
     from models.checkpoint_utils import load_checkpoint_state, extract_model_state
 
     ckpt = load_checkpoint_state(checkpoint_path, device=device)
     model_state = extract_model_state(ckpt)
 
+    # Read architecture config from sidecar _meta.json (B1 fix)
+    audio_encoder = "emotion2vec"
+    embed_dim = 256
+    ckpt_path = _Path(checkpoint_path)
+    meta_path = ckpt_path.parent / f"{ckpt_path.stem}_meta.json"
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = _json.load(f)
+        exp_cfg = meta.get("experiment_config", {})
+        audio_encoder = exp_cfg.get("audio_encoder", audio_encoder)
+        embed_dim = exp_cfg.get("embed_dim", embed_dim)
+        logger.info(f"[Bench] Config from meta.json: audio_encoder={audio_encoder}, embed_dim={embed_dim}")
+    else:
+        logger.warning(f"[Bench] No _meta.json found at {meta_path}, using defaults (audio_encoder={audio_encoder})")
+
     model = ConflictNet(
-        audio_encoder_name=ckpt.get("audio_encoder", "emotion2vec"),
-        embed_dim=ckpt.get("embed_dim", 256),
+        audio_encoder_name=audio_encoder,
+        embed_dim=embed_dim,
     )
     model.load_state_dict(model_state, strict=False)
     model.to(device)
@@ -389,7 +409,7 @@ def main():
     # Also save a human-readable summary
     summary_lines = [
         "=" * 60,
-        f"  ConflictNet Benchmark Report",
+        "  ConflictNet Benchmark Report",
         f"  Checkpoint: {args.checkpoint}",
         f"  Datasets: {', '.join(sorted(summary['per_dataset'].keys()))}",
         "=" * 60,

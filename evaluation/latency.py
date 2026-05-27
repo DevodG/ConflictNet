@@ -37,7 +37,7 @@ def benchmark_latency(
 
     latencies = sorted(latencies)
     avg_ms = sum(latencies) / len(latencies)
-    std_ms = (sum((l - avg_ms) ** 2 for l in latencies) / len(latencies)) ** 0.5
+    std_ms = (sum((lat - avg_ms) ** 2 for lat in latencies) / len(latencies)) ** 0.5
     batch_size = dummy_batch["audio"].size(0)
 
     return {

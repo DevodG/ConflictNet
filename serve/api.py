@@ -24,7 +24,6 @@ from serve.schemas import (
     PredictBatchResponse,
     PredictBatchRequest,
     HealthResponse,
-    ErrorResponse,
 )
 
 logger = logging.getLogger(__name__)

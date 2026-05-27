@@ -237,7 +237,7 @@ class TestContrastiveLoss:
     def test_cross_modal_attention_shape(self):
         from models.alignment import CrossModalAttention
         attn = CrossModalAttention(embed_dim=32, n_heads=2)
-        B, T, D = 4, 5, 32
+        B, D = 4, 32
         audio = torch.randn(B, D)
         text = torch.randn(B, D)
         # Without context

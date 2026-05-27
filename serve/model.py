@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json as _json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,6 +45,20 @@ class ServeModel:
         model_state = extract_model_state(state)
 
         logger.info("Building model")
+
+        # Warn if serving config differs from training config (B1 fix)
+        meta_path = ckpt_path.parent / f"{ckpt_path.stem}_meta.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = _json.load(f)
+            exp_cfg = meta.get("experiment_config", {})
+            for key, val in [("audio_encoder", self.cfg.audio_encoder),
+                             ("embed_dim", self.cfg.embed_dim),
+                             ("lora_r", self.cfg.lora_r)]:
+                trained_val = exp_cfg.get(key)
+                if trained_val is not None and str(trained_val) != str(val):
+                    logger.warning(f"Serving {key}={val} differs from training {key}={trained_val}")
+
         self.model = ConflictNet(
             audio_encoder_name=self.cfg.audio_encoder,
             embed_dim=self.cfg.embed_dim,
@@ -66,7 +81,7 @@ class ServeModel:
         self.model.to(self.device)
         self.model.eval()
 
-        logger.info(f"Loading tokenizer (microsoft/deberta-v3-large)")
+        logger.info("Loading tokenizer (microsoft/deberta-v3-large)")
         self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-large")
 
     @torch.no_grad()

@@ -209,30 +209,36 @@ class ContextGatedContrastiveLoss(nn.Module):
         audio_embeds = F.normalize(audio_embeds, dim=-1)
         text_embeds = F.normalize(text_embeds, dim=-1)
 
-        # Effective temperature
-        tau = self.log_tau.exp()
+        # Effective temperature — per-sample when context is available
+        tau = self.log_tau.exp()  # scalar (base)
         if context_pooled is not None:
             delta_tau = self.context_gate(context_pooled).squeeze(-1)  # (B,)
-            # Per-sample temperature, then mean — keep scalar for loss
-            tau = (self.log_tau + delta_tau).exp().mean()
+            tau = (self.log_tau + delta_tau).exp()  # (B,) — per-sample temperature
 
-        # Similarity matrix (B, B)
-        sim = audio_embeds @ text_embeds.T / tau  # (B, B)
+        # Un-scaled cosine similarity matrix (B, B)
+        sim_raw = audio_embeds @ text_embeds.T  # (B, B)
+
+        # Per-sample temperature scaling: each row (audio anchor) divided by its tau
+        if tau.dim() > 0:
+            sim_a2t = sim_raw / tau.unsqueeze(1)  # (B, B) — audio-to-text, per-row temp
+            sim_t2a = sim_raw.T / tau.unsqueeze(1)  # (B, B) — text-to-audio, per-row temp
+        else:
+            sim_a2t = sim_raw / tau
+            sim_t2a = sim_raw.T / tau
 
         # Standard symmetric InfoNCE
         B = audio_embeds.size(0)
         labels = torch.arange(B, device=audio_embeds.device)
-        loss_a2t = F.cross_entropy(sim, labels)
-        loss_t2a = F.cross_entropy(sim.T, labels)
+        loss_a2t = F.cross_entropy(sim_a2t, labels)
+        loss_t2a = F.cross_entropy(sim_t2a, labels)
         contrastive_loss = (loss_a2t + loss_t2a) / 2
 
         # Conflict separation loss: push paired audio↔text apart by margin
+        # (uses un-scaled cosine similarities since margin is in cosine space)
         conflict_sep_loss = torch.tensor(0.0, device=audio_embeds.device)
         if conflict_labels is not None and conflict_labels.sum() > 0:
-            # Diagonal of sim matrix = paired (audio_i, text_i) similarities
-            paired_sim = torch.diagonal(sim * tau)  # (B,) — un-scaled cosine sim
+            paired_sim = torch.diagonal(sim_raw)  # (B,) — un-scaled cosine sim
             conflict_mask = conflict_labels.bool()
-            # Hinge loss: penalise if paired similarity > -margin (they should be misaligned)
             conflict_sep_loss = F.relu(
                 paired_sim[conflict_mask] + self.conflict_margin
             ).mean()

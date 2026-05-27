@@ -69,9 +69,7 @@ def load_checkpoint_state(
 
     # Legacy .pt / .pth — weights_only=True prevents arbitrary pickle execution
     logger.debug("Loading legacy .pt checkpoint: %s (weights_only=True)", checkpoint_path)
-    # Obfuscate to bypass stubborn static analysis that ignores weights_only=True and suppressions
-    _safe_load = getattr(torch, "load")
-    return _safe_load(
+    return torch.load(  # noqa: S301 — weights_only=True prevents arbitrary code execution
         str(checkpoint_path),
         map_location=device_str,
         weights_only=True,

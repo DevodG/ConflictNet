@@ -38,7 +38,7 @@ def test_cross_modal_attention_no_context():
 
     assert audio_mod.shape == (B, D), f"Expected ({B}, {D}), got {audio_mod.shape}"
     assert text_mod.shape == (B, D)
-    print(f"  [PASS] CrossModalAttention (no context): shapes OK")
+    print("  [PASS] CrossModalAttention (no context): shapes OK")
     print(f"         audio_mod range: [{audio_mod.min().item():.3f}, {audio_mod.max().item():.3f}]")
 
 
@@ -58,7 +58,7 @@ def test_cross_modal_attention_with_context():
 
     assert audio_mod.shape == (B, D)
     assert text_mod.shape == (B, D)
-    print(f"  [PASS] CrossModalAttention (with context): shapes OK")
+    print("  [PASS] CrossModalAttention (with context): shapes OK")
 
 
 def test_cross_modal_attention_with_context_and_padding():
@@ -79,7 +79,7 @@ def test_cross_modal_attention_with_context_and_padding():
 
     assert audio_mod.shape == (B, D)
     assert text_mod.shape == (B, D)
-    print(f"  [PASS] CrossModalAttention (with context + padding): shapes OK")
+    print("  [PASS] CrossModalAttention (with context + padding): shapes OK")
 
 
 def test_cross_modal_attention_cold_start():
@@ -99,7 +99,7 @@ def test_cross_modal_attention_cold_start():
 
     assert audio_mod.shape == (B, D)
     assert text_mod.shape == (B, D)
-    print(f"  [PASS] CrossModalAttention (cold-start guard): shapes OK")
+    print("  [PASS] CrossModalAttention (cold-start guard): shapes OK")
 
 
 def test_full_forward_chain():
@@ -107,7 +107,6 @@ def test_full_forward_chain():
     from models.alignment import CrossModalAttention, ProjectionHead
     from models.classifier import ConflictClassifier
     from models.temporal import TransformerTemporalContext
-    from models.speaker_norm.speaker_norm import SpeakerNormalizer
 
     B, D = 4, 64
     T = 5
@@ -155,7 +154,7 @@ def test_full_forward_chain():
     assert severity.shape == (B, 1)
     assert flag.shape == (B,)
     assert flag.dtype == torch.bool
-    print(f"  [PASS] Full forward chain: shapes OK")
+    print("  [PASS] Full forward chain: shapes OK")
     print(f"         logits range: [{logits.min().item():.3f}, {logits.max().item():.3f}]")
     print(f"         probs range:  [{probs.min().item():.3f}, {probs.max().item():.3f}]")
 
@@ -197,7 +196,7 @@ def test_baseline_normalize_integration():
 
     assert feat1.shape == (1, 3), f"Expected (1, 3), got {feat1.shape}"
     assert feat2.shape == (1, 3)
-    print(f"  [PASS] Baseline-normalize integration: shapes OK")
+    print("  [PASS] Baseline-normalize integration: shapes OK")
 
 
 def test_speaker_adaptive_threshold_variation():
@@ -215,7 +214,7 @@ def test_speaker_adaptive_threshold_variation():
 
     assert 0 <= offset_e <= 0.3
     assert 0 <= offset_m <= 0.3
-    print(f"  [PASS] SpeakerAdaptiveThreshold produces different offsets")
+    print("  [PASS] SpeakerAdaptiveThreshold produces different offsets")
     print(f"         expressive offset: {offset_e:.4f}, monotone offset: {offset_m:.4f}")
 
 
@@ -233,7 +232,7 @@ def test_classifier_with_and_without_speaker_feat():
 
     assert flag_with.shape == (B,)
     assert flag_without.shape == (B,)
-    print(f"  [PASS] Classifier works with AND without speaker_feat")
+    print("  [PASS] Classifier works with AND without speaker_feat")
 
 
 def test_swap_pretraining():

@@ -7,9 +7,8 @@ import json
 import os
 import tempfile
 import types
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -868,7 +867,7 @@ class TestHumanEval:
             pass  # module imported successfully
 
     def test_compute_annotator_agreement_with_csv(self):
-        pandas = pytest.importorskip("pandas", reason="pandas required for annotator agreement")
+        pytest.importorskip("pandas", reason="pandas required for annotator agreement")
         pytest.importorskip("sklearn", reason="scikit-learn required for annotator agreement")
         from evaluation.human_eval import compute_annotator_agreement
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f1:

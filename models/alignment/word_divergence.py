@@ -47,7 +47,7 @@ def parse_textgrid(tg_path: str) -> List[Tuple[str, float, float]]:
     """
     words: List[Tuple[str, float, float]] = []
     with open(tg_path, "r", encoding="utf-8-sig") as f:
-        lines = [l.rstrip("\n") for l in f]
+        lines = [line.rstrip("\n") for line in f]
 
     tiers = _split_tiers(lines)
     target = _find_word_tier(tiers)
@@ -288,7 +288,13 @@ class WordLevelDivergence(nn.Module):
 
             wa = torch.stack(word_audio)
             wt = torch.stack(word_text)
-            n = min(wa.size(0), wt.size(0))
+            n_words_audio, n_words_text = wa.size(0), wt.size(0)
+            if n_words_audio != n_words_text:
+                logger.warning(
+                    "Word count mismatch: audio_words=%d, text_words=%d. Truncating to %d.",
+                    n_words_audio, n_words_text, min(n_words_audio, n_words_text),
+                )
+            n = min(n_words_audio, n_words_text)
             div = self.compute_word_divergences(wa[:n], wt[:n])
             feats.append(self.aggregate(div))
 

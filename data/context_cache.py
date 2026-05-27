@@ -72,8 +72,8 @@ class ContextCache:
             (ctx.size(0) for ctx in contexts if ctx is not None), default=0
         )
         if max_len == 0:
-            embeds = torch.zeros(B, 1, embed_dim)
-            padding = torch.ones(B, 1, dtype=torch.bool)
+            embeds = torch.zeros(B, 1, embed_dim, device=self.device)
+            padding = torch.ones(B, 1, dtype=torch.bool, device=self.device)
             return embeds, padding, conv_ids
 
         T = max(1, min(max_len, self.max_turns))

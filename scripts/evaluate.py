@@ -175,7 +175,6 @@ def main():
         sample = sample_audio[0]
         try:
             tokenizer = model.text_encoder.tokenizer
-            sample_texts = [b.get("text", "") for b in eval_set][:4]  # type: ignore
             sample_batch = eval_loader.dataset[0]
             input_ids = sample_batch["input_ids"].unsqueeze(0).to(args.device)
             attention_mask = sample_batch["attention_mask"].unsqueeze(0).to(args.device)
@@ -201,7 +200,6 @@ def main():
         if not os.environ.get("OPENAI_API_KEY"):
             logger.warning("[LLM Baseline] OPENAI_API_KEY not set, skipping")
         else:
-            from evaluation.llm_baseline import run_llm_baseline
             # Requires test items with 'text' field — skipping here without data
             logger.info("[LLM Baseline] Set up test_items list with 'text' field and call run_llm_baseline()")
 

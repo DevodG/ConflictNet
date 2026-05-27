@@ -37,7 +37,6 @@ def extract_prosody_stats(
     stats: Dict[str, float] = {}
     try:
         import parselmouth  # type: ignore
-        from parselmouth.praat import call  # type: ignore
 
         snd = parselmouth.Sound(audio_np, sampling_frequency=sr)
         pitch = snd.to_pitch()

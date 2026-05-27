@@ -25,6 +25,7 @@ import csv
 import json
 import logging
 import os
+import random
 import re as _re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -256,9 +257,9 @@ class IEMOCAPDataset(Dataset):
                             "emotion": emotion,
                             "conflict_binary": int(conflict),
                             "conflict_type_labels": [0, int(conflict), 0],  # [sarcasm, suppression, deception]
-                            "severity": 0.7 if conflict else 0.1,
-                            "speaker_id": utt_id[:5],  # e.g. 'Ses01'
-                            "gender": "F" if utt_id[5] == "F" else "M",
+                            "severity": float(conflict),  # binary proxy; no real severity annotation in IEMOCAP
+                        "speaker_id": utt_id[:6],  # e.g. 'Ses01F' — session+gender uniquely identifies speaker
+                        "gender": "F" if utt_id[5] == "F" else "M",
                             "conversation_id": conv_id,
                             "turn_index": turn_idx,
                         })
@@ -355,16 +356,12 @@ class MUStARDDataset(Dataset):
         with open(json_path) as f:
             data = json.load(f)
 
-        all_keys = list(data.keys())
-        n_train = int(len(all_keys) * train_ratio)
-        keys = all_keys[:n_train] if split == "train" else all_keys[n_train:]
-
         wav_search_root = self.root / self.wav_dir if not self.wav_dir.is_absolute() else self.wav_dir
         logger.info(f"[MUStARD++] Searching for wavs in {wav_search_root} with pattern {self.wav_pattern}")
 
-        items = []
-        for key in keys:
-            sample = data[key]
+        # Collect all samples with speaker info
+        all_samples = []
+        for key, sample in data.items():
             wav_candidates = list(wav_search_root.rglob(f"{key}*{self.wav_pattern.lstrip('*') if self.wav_pattern.startswith('*') else ''}"))
             if not wav_candidates:
                 wav_candidates = list(wav_search_root.rglob(f"**/{key}{self.wav_pattern.lstrip('*')}"))
@@ -374,13 +371,31 @@ class MUStARDDataset(Dataset):
             if not wav_candidates:
                 logger.warning(f"[MUStARD++] No wav found for key={key}, searched in {wav_search_root}")
                 continue
-            items.append({
+            all_samples.append({
                 "wav_path": str(wav_candidates[0]),
                 "text": sample.get("utterance", ""),
                 "sarcasm": int(sample.get("sarcasm", 0)),
                 "speaker_id": sample.get("speaker", "unknown"),
             })
-        return items
+
+        # Speaker-stratified split: group by speaker, assign whole speakers to train/val
+        speaker_groups: Dict[str, List[Dict]] = {}
+        for s in all_samples:
+            speaker_groups.setdefault(s["speaker_id"], []).append(s)
+        rng = random.Random(42)  # deterministic shuffle for reproducibility
+        speaker_ids = list(speaker_groups.keys())
+        rng.shuffle(speaker_ids)
+
+        train_items: List[Dict] = []
+        val_items: List[Dict] = []
+        target_train = int(len(all_samples) * train_ratio)
+        for sid in speaker_ids:
+            samples = speaker_groups[sid]
+            if len(train_items) + len(samples) <= target_train or not val_items:
+                train_items.extend(samples)
+            else:
+                val_items.extend(samples)
+        return train_items if split == "train" else val_items
 
     def __len__(self) -> int:
         return len(self.items)
@@ -408,7 +423,7 @@ class MUStARDDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(sarcasm, dtype=torch.long),
             "conflict_type_labels": torch.tensor([sarcasm, 0, 0], dtype=torch.float),
-            "severity": torch.tensor(0.8 if sarcasm else 0.1, dtype=torch.float),
+            "severity": torch.tensor(float(sarcasm), dtype=torch.float),  # binary proxy; no real severity in MUStARD++
             "speaker_id": item["speaker_id"],
             "gender": None,
             "text": item["text"],
@@ -472,32 +487,48 @@ class CREMADDataset(Dataset):
             logger.warning(f"[CREMA-D] Missing AudioWAV dir: {wav_dir}")
             return []
 
-        all_wavs = sorted(wav_dir.glob("*.wav"))
-        n_train = int(len(all_wavs) * train_ratio)
-        wavs = all_wavs[:n_train] if split == "train" else all_wavs[n_train:]
+        all_wavs = list(wav_dir.glob("*.wav"))
 
-        items = []
-        for wav in wavs:
+        # Collect all samples with actor info
+        all_samples = []
+        for wav in all_wavs:
             parts = wav.stem.split("_")
             if len(parts) < 4:
                 continue
-            actor_id = parts[0]  # e.g. "1001"
-            sentence_id = parts[1]  # e.g. "IEO"
-            emotion = parts[2]  # e.g. "ANG"
-
+            actor_id = parts[0]
+            sentence_id = parts[1]
+            emotion = parts[2]
             text = self._SENTENCES.get(sentence_id, "")
             conflict = emotion in CREMAD_CONFLICT_EMOTIONS
-            items.append({
+            all_samples.append({
                 "wav_path": str(wav),
                 "text": text,
                 "emotion": CREMAD_EMOTIONS.get(emotion, emotion.lower()),
                 "conflict_binary": int(conflict),
-                "conflict_type_labels": [0, int(conflict), 0],  # suppression
-                "severity": 0.5 if conflict else 0.1,
+                "conflict_type_labels": [0, int(conflict), 0],
+                "severity": float(conflict),
                 "speaker_id": f"cremad_{actor_id}",
-                "gender": None,  # not encoded in filename
+                "gender": None,
             })
-        return items
+
+        # Speaker-stratified split: group by actor, assign whole actors to train/val
+        speaker_groups: Dict[str, List[Dict]] = {}
+        for s in all_samples:
+            speaker_groups.setdefault(s["speaker_id"], []).append(s)
+        rng = random.Random(42)
+        speaker_ids = list(speaker_groups.keys())
+        rng.shuffle(speaker_ids)
+
+        train_items: List[Dict] = []
+        val_items: List[Dict] = []
+        target_train = int(len(all_samples) * train_ratio)
+        for sid in speaker_ids:
+            samples = speaker_groups[sid]
+            if len(train_items) + len(samples) <= target_train or not val_items:
+                train_items.extend(samples)
+            else:
+                val_items.extend(samples)
+        return train_items if split == "train" else val_items
 
     def __len__(self) -> int:
         return len(self.items)
@@ -624,8 +655,8 @@ class MELDDataset(Dataset):
                     "utterance_id": int(utt_id) if utt_id.isdigit() else 0,
                     "conflict_binary": int(conflict),
                     "conflict_type_labels": [0, int(conflict), 0],  # suppression
-                    "severity": 0.6 if conflict else 0.1,
-                    "speaker_id": f"meld_{speaker}_{dia_id}",
+                    "severity": float(conflict),  # binary proxy; no real severity in MELD
+                    "speaker_id": f"meld_{speaker}",
                     "gender": None,
                 })
         return items
@@ -752,6 +783,8 @@ class CMUMOSEIDataset(Dataset):
                     continue
 
                 conflict = emotion in CMUMOSEI_CONFLICT_EMOTIONS
+                # CMU-MOSEI utterance IDs: {video_id}_{segment}; use video_id as speaker proxy
+                speaker_prefix = uid.split("_")[0] if "_" in uid else uid
                 items.append({
                     "wav_path": str(wav_path),
                     "text": text,
@@ -759,8 +792,8 @@ class CMUMOSEIDataset(Dataset):
                     "utterance_id": uid,
                     "conflict_binary": int(conflict),
                     "conflict_type_labels": [0, int(conflict), 0],  # suppression
-                    "severity": 0.7 if conflict else 0.1,
-                    "speaker_id": f"mosei_{uid}",
+                    "severity": float(conflict),  # binary proxy; no real severity in CMU-MOSEI
+                    "speaker_id": f"mosei_{speaker_prefix}",
                     "gender": None,
                 })
         return items

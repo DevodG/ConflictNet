@@ -245,6 +245,9 @@ class ConflictNetTrainer:
         from sklearn.metrics import f1_score  # type: ignore
 
         self.model.eval()
+        # Clear context cache to prevent training dialogue context from
+        # leaking into validation (fixes L3 data leakage path)
+        self.ctx_cache.clear()
         all_preds, all_labels = [], []
 
         for batch in self.val_loader:
