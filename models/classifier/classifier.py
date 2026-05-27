@@ -108,6 +108,7 @@ class ConflictClassifier(nn.Module):
         self.severity_head = severity_head
         self.type_threshold = type_threshold
         self.speaker_adaptive_threshold = speaker_adaptive_threshold
+        self.word_div_dim = word_div_dim
 
         input_dim = embed_dim + word_div_dim
 
@@ -148,6 +149,9 @@ class ConflictClassifier(nn.Module):
         """
         if word_div is not None:
             x = torch.cat([fused_embed, word_div], dim=-1)
+        elif self.word_div_dim > 0:
+            zeros = torch.zeros(fused_embed.size(0), self.word_div_dim, device=fused_embed.device, dtype=fused_embed.dtype)
+            x = torch.cat([fused_embed, zeros], dim=-1)
         else:
             x = fused_embed
 

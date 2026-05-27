@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def parse_args():
     p = argparse.ArgumentParser(description="Compute sample difficulty scores")
     p.add_argument("--checkpoint", type=str, default=None,
-                   help="Path to .safetensors checkpoint (optional; random init if omitted)")
+                   help="Path to .safetensors / .pt / .pth checkpoint (optional; random init if omitted)")
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
     p.add_argument("--cremad_root", type=str, default=None)
@@ -78,9 +78,13 @@ def main():
 
     model = ConflictNet()
     if args.checkpoint:
-        from safetensors.torch import load_file as st_load
-        state = st_load(args.checkpoint, device=args.device)
-        model.load_state_dict(state, strict=False)
+        from models.checkpoint_utils import load_checkpoint_state
+        state = load_checkpoint_state(args.checkpoint, device=args.device)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            logger.warning(f"Missing keys: {missing}")
+        if unexpected:
+            logger.warning(f"Unexpected keys: {unexpected}")
         logger.info(f"[Difficulties] Loaded checkpoint: {args.checkpoint}")
     else:
         logger.info("[Difficulties] No checkpoint — using random init")

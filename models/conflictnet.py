@@ -477,7 +477,9 @@ class ConflictNet(nn.Module):
 
             # 6c. Severity MSE loss
             if severity is not None and severity_labels is not None:
-                sev_loss = nn.functional.mse_loss(severity, severity_labels.float())
+                sev_target = severity_labels.float().view(-1)
+                sev_pred = severity.view(-1)
+                sev_loss = nn.functional.mse_loss(sev_pred, sev_target)
                 losses.append(sev_loss)
             else:
                 losses.append(torch.tensor(0.0, device=audio.device))
@@ -489,13 +491,13 @@ class ConflictNet(nn.Module):
 
             loss, sigma_weights = self.multi_task_loss(losses)
             loss_breakdown = {
-                "contrastive": float(losses[0]),
-                "type_bce": float(losses[1]),
-                "severity_mse": float(losses[2]),
+                "contrastive": losses[0].detach().item(),
+                "type_bce": losses[1].detach().item(),
+                "severity_mse": losses[2].detach().item(),
                 **sigma_weights,
             }
             if self.swap_objective is not None:
-                loss_breakdown["swap"] = float(losses[3])
+                loss_breakdown["swap"] = losses[3].detach().item()
 
         return ConflictNetOutput(
             logits_type=logits_type,
