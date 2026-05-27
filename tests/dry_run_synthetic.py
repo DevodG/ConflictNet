@@ -69,6 +69,7 @@ def test_full_forward():
     out: ConflictNetOutput = model(audio=audio, input_ids=input_ids, attention_mask=attention_mask)
     assert out.logits_type.shape == (B, 3), f"logits_type: {out.logits_type.shape}"
     assert out.probs_type.shape == (B, 3), f"probs_type: {out.probs_type.shape}"
+    assert out.severity is not None
     assert out.severity.shape == (B, 1) or out.severity.shape == (B,), f"severity: {out.severity.shape}"
     assert out.conflict_flag.shape == (B,), f"conflict_flag: {out.conflict_flag.shape}"
     assert out.loss is None, "No labels → no loss"

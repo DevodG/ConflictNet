@@ -84,9 +84,9 @@ def sweep_threshold(
             elif tp.sum() == 0:
                 type_f1s.append(0.0)
             else:
-                type_f1s.append(f1_score(labels_type[:, t], tp, zero_division=0.0))  # type: ignore
+                type_f1s.append(f1_score(labels_type[:, t], tp, zero_division=0))
         macro_f1_list.append(float(np.mean(type_f1s)))
-        binary_f1_list.append(float(f1_score(binary_true, binary_pred, zero_division=0.0)))  # type: ignore
+        binary_f1_list.append(float(f1_score(binary_true, binary_pred, zero_division=0)))
 
     return {
         "thresholds": np.array(thresholds_list),

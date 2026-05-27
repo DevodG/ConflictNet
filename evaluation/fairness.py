@@ -47,7 +47,7 @@ def fairness_audit(
 
         if metric_fn is None:
             def metric_fn(y, p):
-                return f1_score(y, p, zero_division=0.0)
+                return f1_score(y, p, zero_division=0)
 
         mf = MetricFrame(
             metrics={"f1": metric_fn},
@@ -85,11 +85,11 @@ def fairness_audit(
         for g in groups:
             mask = np.array(sensitive_features) == g
             if mask.sum() > 0:
-                by_group[g] = f1_score(y_true[mask], y_pred[mask], zero_division=0.0)  # type: ignore[arg-type]
+                by_group[g] = f1_score(y_true[mask], y_pred[mask], zero_division=0)
 
         values = list(by_group.values())
         return {
-            "overall_f1": f1_score(y_true, y_pred, zero_division=0.0),  # type: ignore[arg-type]
+            "overall_f1": f1_score(y_true, y_pred, zero_division=0),
             "by_group": by_group,
             "disparity": max(values) - min(values) if len(values) >= 2 else 0.0,
             "demographic_parity_difference": None,

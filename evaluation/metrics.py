@@ -52,7 +52,7 @@ def compute_all_metrics(
     preds_type = (probs_type >= type_threshold).astype(int)
 
     # Macro F1 across types
-    metrics["macro_f1"] = f1_score(labels_type, preds_type, average="macro", zero_division=0.0)  # type: ignore[arg-type]
+    metrics["macro_f1"] = f1_score(labels_type, preds_type, average="macro", zero_division=0)
 
     # Per-type metrics
     for i, name in enumerate(type_names[:n_types]):
@@ -60,7 +60,7 @@ def compute_all_metrics(
         y = labels_type[:, i]
         pred = preds_type[:, i]
 
-        metrics[f"f1_{name}"] = f1_score(y, pred, zero_division=0.0)  # type: ignore[arg-type]
+        metrics[f"f1_{name}"] = f1_score(y, pred, zero_division=0)
         if y.sum() > 0:
             metrics[f"ap_{name}"] = average_precision_score(y, p)
             try:
@@ -71,7 +71,7 @@ def compute_all_metrics(
     # Binary conflict flag (any type)
     conflict_pred = preds_type.any(axis=1).astype(int)
     conflict_true = labels_type.any(axis=1).astype(int)
-    metrics["binary_f1"] = f1_score(conflict_true, conflict_pred, zero_division=0.0)  # type: ignore[arg-type]
+    metrics["binary_f1"] = f1_score(conflict_true, conflict_pred, zero_division=0)
     metrics["binary_acc"] = accuracy_score(conflict_true, conflict_pred)
     try:
         metrics["binary_auc"] = roc_auc_score(conflict_true, probs_type.max(axis=1))
