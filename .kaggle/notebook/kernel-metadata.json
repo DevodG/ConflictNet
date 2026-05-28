@@ -1,0 +1,18 @@
+{
+  "id": "shashwatgoyal07/conflictnet-training",
+  "title": "ConflictNet Training on GPU",
+  "code_file": "train_conflictnet.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "ejlok1/cremad",
+    "shashwatgoyal07/conflictnet-code"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

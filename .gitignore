@@ -49,3 +49,7 @@ wandb/
 
 # Download artifacts
 data/mustard/audio/
+
+# Kaggle build artifacts (keep metadata/notebook source)
+.kaggle/dataset/conflictnet-code/
+.kaggle/dataset/*.zip

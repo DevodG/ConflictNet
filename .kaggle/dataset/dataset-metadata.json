@@ -5,11 +5,5 @@
     {
       "name": "MIT"
     }
-  ],
-  "resources": [
-    {
-      "path": "conflictnet",
-      "description": "ConflictNet source code, prosody stats, and MUStARD++ JSON"
-    }
   ]
 }
