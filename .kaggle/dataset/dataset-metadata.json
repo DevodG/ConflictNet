@@ -1,0 +1,15 @@
+{
+  "title": "ConflictNet Code + Prosody Stats",
+  "id": "shashwatgoyal07/conflictnet-code",
+  "licenses": [
+    {
+      "name": "MIT"
+    }
+  ],
+  "resources": [
+    {
+      "path": "conflictnet",
+      "description": "ConflictNet source code, prosody stats, and MUStARD++ JSON"
+    }
+  ]
+}

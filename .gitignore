@@ -42,3 +42,10 @@ ood_results/
 # Logs
 *.log
 wandb/
+
+# Kaggle dataset build artifacts
+.kaggle/dataset/conflictnet/
+.kaggle/dataset/__pycache__/
+
+# Download artifacts
+data/mustard/audio/
