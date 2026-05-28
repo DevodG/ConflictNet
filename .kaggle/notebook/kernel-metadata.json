@@ -1,5 +1,5 @@
 {
-  "id": "shashwatgoyal07/conflictnet-training",
+  "id": "shashwatgoyal07/conflictnet-training-on-gpu",
   "title": "ConflictNet Training on GPU",
   "code_file": "train_conflictnet.py",
   "language": "python",

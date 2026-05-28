@@ -61,17 +61,8 @@ def setup_data():
     if mustard_json_src.exists():
         (MUSTARD_DIR / "mustard++_raw_data.json").symlink_to(mustard_json_src.resolve())
 
-    # Try downloading MUStARD++ audio from Google Drive
-    try:
-        import gdown
-        gdown.download_folder(
-            "https://drive.google.com/drive/folders/1kUdT2yU7ERJ5KdauObTj5oQsBlSrvTlW",
-            output=str(MUSTARD_DIR / "utterances_final"),
-        )
-        logger.info("MUStARD++ audio downloaded")
-    except Exception as e:
-        logger.warning(f"MUStARD++ audio download failed: {e}")
-        logger.warning("Will train on CREMA-D only")
+    # MUStARD++ audio not available (GDrive quota exhausted) — CREMA-D only
+    logger.info("MUStARD++ audio unavailable — training on CREMA-D only")
 
     # Copy prosody stats
     for fname in ["prosody_stats.json", "prosody_stats.zscores.json"]:
