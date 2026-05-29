@@ -169,8 +169,31 @@ def run_training(code_dir, tok_dir):
         logger.error(f"Training script not found at {train_script}")
         sys.exit(1)
 
+    # Write a wrapper script that patches from_pretrained() to force float32
+    # (DeBERTa model safetensors are float16, but projection layers are float32)
+    wrapper = WORK_DIR / "run_train.py"
+    wrapper.write_text(f"""\
+import functools, sys, torch
+from pathlib import Path
+
+# Monkey-patch PreTrainedModel.from_pretrained to force float32
+# (DeBERTa-v3-large safetensors are fp16, but projection layers created in fp32)
+from transformers.modeling_utils import PreTrainedModel
+_orig_from_pretrained = PreTrainedModel.from_pretrained.__func__
+
+@classmethod
+def _patched_from_pretrained(cls, *args, **kwargs):
+    kwargs.setdefault("torch_dtype", torch.float32)
+    return _orig_from_pretrained(cls, *args, **kwargs)
+
+PreTrainedModel.from_pretrained = _patched_from_pretrained
+
+sys.path.insert(0, "{code_dir}")
+exec(Path("{train_script}").read_text())
+""")
+
     args = [
-        sys.executable, str(train_script),
+        sys.executable, str(wrapper),
         "--cremad_root", str(CREMAD_DIR),
         "--epochs", "30",
         "--batch_size", "8",
@@ -190,7 +213,7 @@ def run_training(code_dir, tok_dir):
             args.extend(["--mustard_root", str(MUSTARD_DIR)])
             logger.info("MUStARD++ root found, including in training")
 
-    logger.info(f"Command: {' '.join(args)}")
+    logger.info(f"Command through wrapper: {' '.join(args)}")
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{code_dir}:{env.get('PYTHONPATH', '')}"
     result = subprocess.run(args, cwd=str(code_dir), env=env)
