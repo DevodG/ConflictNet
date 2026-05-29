@@ -177,7 +177,6 @@ def run_training(code_dir, tok_dir):
         "--lr", "5e-5",
         "--audio_encoder", "wavlm",
         "--no_word_divergence",
-        "--amp",
         "--gradient_accumulation_steps", "2",
         "--tokenizer_path", str(tok_dir) if tok_dir else "",
         "--prosody_stats", str(WORK_DIR / "prosody_stats.json"),
