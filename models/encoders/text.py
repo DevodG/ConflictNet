@@ -45,8 +45,8 @@ class DeBERTaEncoder(nn.Module):
                 self._apply_lora(lora_r, lora_alpha)
             return
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger = logging.getLogger(__name__)
+            logger.warning(
                 f"DeBERTa model {model_name} unavailable ({e}), using fallback text encoder"
             )
 
