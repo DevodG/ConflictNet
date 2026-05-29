@@ -10,7 +10,8 @@
   "enable_internet": true,
   "dataset_sources": [
     "ejlok1/cremad",
-    "shashwatgoyal07/conflictnet-code"
+    "shashwatgoyal07/conflictnet-code",
+    "shashwatgoyal07/conflictnet-models"
   ],
   "competition_sources": [],
   "kernel_sources": [],

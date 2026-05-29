@@ -67,6 +67,8 @@ def parse_args(argv=None):
                    help="Path to .pt file from compute_prosody_stats.py with per-utterance z-scores")
     p.add_argument("--amp", action="store_true",
                    help="Enable automatic mixed precision (fp16) training")
+    p.add_argument("--tokenizer_path", type=str, default=None,
+                   help="Path to local tokenizer directory (avoids HuggingFace download)")
     return p.parse_args()
 
 
@@ -131,8 +133,9 @@ def main():
         val_datasets.append(MUStARDDataset(args.mustard_root, split="val"))
 
     if args.cremad_root:
-        train_datasets.append(CREMADDataset(args.cremad_root, split="train"))
-        val_datasets.append(CREMADDataset(args.cremad_root, split="val"))
+        tok_kwargs = {"tokenizer_name": args.tokenizer_path} if args.tokenizer_path else {}
+        train_datasets.append(CREMADDataset(args.cremad_root, split="train", **tok_kwargs))
+        val_datasets.append(CREMADDataset(args.cremad_root, split="val", **tok_kwargs))
 
     if args.meld_root:
         train_datasets.append(MELDDataset(args.meld_root, split="train"))
