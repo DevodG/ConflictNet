@@ -40,59 +40,88 @@ def find_code_dir():
     sys.exit(1)
 
 
-def setup_models():
-    """Extract pretrained model tarballs and set up env vars."""
-    models_dir = WORK_DIR / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
+def find_inputs():
+    """Log the Kaggle input directory structure for debugging."""
+    logger.info("=== Kaggle input structure ===")
+    for p in sorted(KAGGLE_INPUT.rglob("*")):
+        if p.is_file():
+            logger.info(f"  FILE: {p.relative_to(KAGGLE_INPUT)} ({p.stat().st_size} bytes)")
+        elif p.is_dir():
+            logger.info(f"  DIR:  {p.relative_to(KAGGLE_INPUT)}")
+    logger.info("=== End input structure ===")
 
+
+def setup_models():
+    """Find pretrained model directories and set up env vars."""
     hf_cache = WORK_DIR / "hf_cache"
     hf_cache.mkdir(parents=True, exist_ok=True)
 
-    import tarfile
-    for model_key, tar_name, env_var in [
-        ("wavlm", "wavlm-base-plus.tar.gz", "CONFLICTNET_WAVLM_PATH"),
-        ("deberta", "deberta-v3-large.tar.gz", "CONFLICTNET_DEBERTA_PATH"),
-    ]:
-        # Find the tarball in Kaggle inputs
-        tarball = None
-        for p in KAGGLE_INPUT.rglob(tar_name):
-            tarball = p
-            break
-        if tarball is None:
-            logger.error(f"Model tarball {tar_name} not found in Kaggle inputs!")
-            sys.exit(1)
-
-        extract_dir = models_dir / model_key
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Extracting {tar_name} to {extract_dir}...")
-        with tarfile.open(str(tarball), "r:gz") as tar:
-            tar.extractall(path=str(extract_dir))
-
-        # The tarball contains a subdirectory; find it
-        subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
-        if subdirs:
-            model_path = str(subdirs[0])
-        else:
-            model_path = str(extract_dir)
-        os.environ[env_var] = model_path
-        logger.info(f"Set {env_var}={model_path}")
-
-    # Also set HF cache
     os.environ["HF_HOME"] = str(hf_cache)
     os.environ["TRANSFORMERS_CACHE"] = str(hf_cache)
-    logger.info(f"HF_HOME set to {hf_cache}")
+
+    # Find model directories by looking for config.json with known names
+    import tarfile
+    models_dir = WORK_DIR / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    configs = [
+        ("wavlm", "wavlm-base-plus/model.safetensors", "CONFLICTNET_WAVLM_PATH"),
+        ("deberta", "deberta-v3-large/model.safetensors", "CONFLICTNET_DEBERTA_PATH"),
+    ]
+
+    for model_key, marker, env_var in configs:
+        found_path = None
+
+        # Strategy 1: Direct path to extracted model dir
+        for p in KAGGLE_INPUT.rglob(marker):
+            found_path = str(p.parent)
+            logger.info(f"Found {model_key} at {found_path}")
+            break
+
+        # Strategy 2: Look for tar file and extract it
+        if found_path is None:
+            for ext in [".tar.gz", ".tar"]:
+                for p in KAGGLE_INPUT.rglob(f"{model_key}*{ext}"):
+                    logger.info(f"Found {model_key} tarball at {p}, extracting...")
+                    extract_dir = models_dir / model_key
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        mode = "r:gz" if ext == ".tar.gz" else "r:"
+                        with tarfile.open(str(p), mode) as tar:
+                            tar.extractall(path=str(extract_dir))
+                        subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+                        if subdirs:
+                            found_path = str(subdirs[0])
+                        else:
+                            found_path = str(extract_dir)
+                    except Exception as e:
+                        logger.warning(f"Failed to extract {p}: {e}")
+                    break
+                if found_path:
+                    break
+
+        if found_path is None:
+            logger.warning(f"Model {model_key} not found in Kaggle inputs!")
+        else:
+            os.environ[env_var] = found_path
+            logger.info(f"Set {env_var}={found_path}")
 
     # Tokenizer comes from the DeBERTa model dir
     tok_dir = os.environ.get("CONFLICTNET_DEBERTA_PATH")
     if tok_dir:
         import transformers
-        tokenizer = transformers.AutoTokenizer.from_pretrained(tok_dir)
-        logger.info(f"Tokenizer: {type(tokenizer).__name__} (vocab_size={tokenizer.vocab_size})")
+        try:
+            tokenizer = transformers.AutoTokenizer.from_pretrained(tok_dir)
+            logger.info(f"Tokenizer: {type(tokenizer).__name__} (vocab_size={tokenizer.vocab_size})")
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from {tok_dir}: {e}")
+            tok_dir = None
     return tok_dir
 
 
 def setup_data():
     logger.info("Setting up data directories...")
+    find_inputs()
     CREMAD_DIR.mkdir(parents=True, exist_ok=True)
     MUSTARD_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
