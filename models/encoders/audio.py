@@ -70,8 +70,13 @@ class Wav2Vec2Encoder(nn.Module):
         out = self._encoder(audio, attention_mask=attention_mask)
         hs = out.last_hidden_state
         if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).float()
-            pooled = (hs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            feat_lengths = self._encoder._get_feat_extract_output_lengths(
+                attention_mask.sum(dim=1)
+            )
+            max_time = hs.size(1)
+            feat_mask = torch.arange(max_time, device=hs.device).unsqueeze(0) < feat_lengths.unsqueeze(1)
+            feat_mask = feat_mask.unsqueeze(-1).float()
+            pooled = (hs * feat_mask).sum(dim=1) / feat_mask.sum(dim=1).clamp(min=1)
         else:
             pooled = hs.mean(dim=1)
         if return_frames:
@@ -109,8 +114,13 @@ class WavLMEncoder(nn.Module):
         out = self._encoder(audio, attention_mask=attention_mask)
         hs = out.last_hidden_state
         if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).float()
-            pooled = (hs * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            feat_lengths = self._encoder._get_feat_extract_output_lengths(
+                attention_mask.sum(dim=1)
+            )
+            max_time = hs.size(1)
+            feat_mask = torch.arange(max_time, device=hs.device).unsqueeze(0) < feat_lengths.unsqueeze(1)
+            feat_mask = feat_mask.unsqueeze(-1).float()
+            pooled = (hs * feat_mask).sum(dim=1) / feat_mask.sum(dim=1).clamp(min=1)
         else:
             pooled = hs.mean(dim=1)
         if return_frames:
