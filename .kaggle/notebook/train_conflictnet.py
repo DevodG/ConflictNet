@@ -169,26 +169,42 @@ def run_training(code_dir, tok_dir):
         logger.error(f"Training script not found at {train_script}")
         sys.exit(1)
 
-    # Write a wrapper script that patches from_pretrained() to force float32
-    # (DeBERTa model safetensors are float16, but projection layers are float32)
+    # Write a wrapper script that patches encoder forward methods to cast
+    # outputs to float32. DeBERTa-v3-large safetensors are fp16, but
+    # projection layers created by the code default to fp32.
+    # Loading the model in fp32 (via from_pretrained(torch_dtype=fp32))
+    # doubles memory usage and causes OOM. Instead, we keep models in
+    # their native dtype and cast encoder outputs to fp32.
     wrapper = WORK_DIR / "run_train.py"
     wrapper.write_text(f"""\
-import functools, sys, torch
+import sys
 from pathlib import Path
 
-# Monkey-patch PreTrainedModel.from_pretrained to force float32
-# (DeBERTa-v3-large safetensors are fp16, but projection layers created in fp32)
-from transformers.modeling_utils import PreTrainedModel
-_orig_from_pretrained = PreTrainedModel.from_pretrained.__func__
+_code_dir = "{code_dir}"
+sys.path.insert(0, _code_dir)
 
-@classmethod
-def _patched_from_pretrained(cls, *args, **kwargs):
-    kwargs.setdefault("torch_dtype", torch.float32)
-    return _orig_from_pretrained(cls, *args, **kwargs)
+# 1. Import encoder modules BEFORE model construction
+import models.encoders.audio as _audio_mod
+import models.encoders.text as _text_mod
 
-PreTrainedModel.from_pretrained = _patched_from_pretrained
+# 2. Patch forward methods to cast outputs to float32
+_orig_wavlm = _audio_mod.WavLMEncoder.forward
+def _wavlm_forward(self, audio, attention_mask=None, return_frames=False):
+    out = _orig_wavlm(self, audio, attention_mask, return_frames)
+    if return_frames:
+        return (out[0].float(), out[1].float())
+    return out.float()
+_audio_mod.WavLMEncoder.forward = _wavlm_forward
 
-sys.path.insert(0, "{code_dir}")
+_orig_deberta = _text_mod.DeBERTaEncoder.forward
+def _deberta_forward(self, input_ids, attention_mask, return_tokens=False):
+    out = _orig_deberta(self, input_ids, attention_mask, return_tokens)
+    if return_tokens:
+        return (out[0].float(), out[1].float())
+    return out.float()
+_text_mod.DeBERTaEncoder.forward = _deberta_forward
+
+# 3. Run training script
 exec(Path("{train_script}").read_text())
 """)
 
