@@ -4,7 +4,6 @@
 Usage: python train_conflictnet.py
 """
 
-import json
 import logging
 import os
 import subprocess
@@ -169,47 +168,12 @@ def run_training(code_dir, tok_dir):
         logger.error(f"Training script not found at {train_script}")
         sys.exit(1)
 
-    # Write a wrapper script that patches encoder forward methods to cast
-    # outputs to float32. DeBERTa-v3-large safetensors are fp16, but
-    # projection layers created by the code default to fp32.
-    # Loading the model in fp32 (via from_pretrained(torch_dtype=fp32))
-    # doubles memory usage and causes OOM. Instead, we keep models in
-    # their native dtype and cast encoder outputs to fp32.
-    wrapper = WORK_DIR / "run_train.py"
-    wrapper.write_text(f"""\
-import sys
-from pathlib import Path
-
-_code_dir = "{code_dir}"
-sys.path.insert(0, _code_dir)
-
-# 1. Import encoder modules BEFORE model construction
-import models.encoders.audio as _audio_mod
-import models.encoders.text as _text_mod
-
-# 2. Patch forward methods to cast outputs to float32
-_orig_wavlm = _audio_mod.WavLMEncoder.forward
-def _wavlm_forward(self, audio, attention_mask=None, return_frames=False):
-    out = _orig_wavlm(self, audio, attention_mask, return_frames)
-    if return_frames:
-        return (out[0].float(), out[1].float())
-    return out.float()
-_audio_mod.WavLMEncoder.forward = _wavlm_forward
-
-_orig_deberta = _text_mod.DeBERTaEncoder.forward
-def _deberta_forward(self, input_ids, attention_mask, return_tokens=False):
-    out = _orig_deberta(self, input_ids, attention_mask, return_tokens)
-    if return_tokens:
-        return (out[0].float(), out[1].float())
-    return out.float()
-_text_mod.DeBERTaEncoder.forward = _deberta_forward
-
-# 3. Run training script
-exec(Path("{train_script}").read_text())
-""")
+    # Encoder forward methods now cast to float32 natively (see
+    # models/encoders/audio.py and models/encoders/text.py), so no
+    # monkey-patching is needed. AMP is safe to use.
 
     args = [
-        sys.executable, str(wrapper),
+        sys.executable, str(train_script),
         "--cremad_root", str(CREMAD_DIR),
         "--epochs", "30",
         "--batch_size", "8",
@@ -217,6 +181,8 @@ exec(Path("{train_script}").read_text())
         "--audio_encoder", "wavlm",
         "--no_word_divergence",
         "--gradient_accumulation_steps", "2",
+        "--pretrain_epochs", "0",
+        "--amp",
         "--tokenizer_path", str(tok_dir) if tok_dir else "",
         "--prosody_stats", str(WORK_DIR / "prosody_stats.json"),
         "--output_dir", str(OUTPUT_DIR),
@@ -241,13 +207,14 @@ exec(Path("{train_script}").read_text())
 
 def save_outputs():
     logger.info("Saving outputs...")
-    ckpts = list(OUTPUT_DIR.glob("*.pt")) + list(OUTPUT_DIR.glob("*.pth"))
-    for ckpt in ckpts:
-        final_path = WORK_DIR / ckpt.name
-        ckpt.rename(final_path)
-        logger.info(f"Checkpoint saved: {final_path}")
+    patterns = ["*.safetensors", "*.pt", "*.pth", "*_meta.json"]
+    for pattern in patterns:
+        for p in OUTPUT_DIR.glob(pattern):
+            final_path = WORK_DIR / p.name
+            p.rename(final_path)
+            logger.info(f"Saved: {final_path}")
 
-    logs = list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.log"))
+    logs = list(OUTPUT_DIR.glob("*.log"))
     for log in logs:
         final_path = WORK_DIR / log.name
         log.rename(final_path)

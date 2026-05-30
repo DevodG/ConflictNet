@@ -4,7 +4,6 @@
 Usage: python train_conflictnet.py
 """
 
-import json
 import logging
 import os
 import subprocess
@@ -173,10 +172,13 @@ def run_training(code_dir, tok_dir):
         sys.executable, str(train_script),
         "--cremad_root", str(CREMAD_DIR),
         "--epochs", "30",
-        "--batch_size", "16",
+        "--batch_size", "8",
         "--lr", "5e-5",
         "--audio_encoder", "wavlm",
         "--no_word_divergence",
+        "--gradient_accumulation_steps", "2",
+        "--pretrain_epochs", "0",
+        "--amp",
         "--tokenizer_path", str(tok_dir) if tok_dir else "",
         "--prosody_stats", str(WORK_DIR / "prosody_stats.json"),
         "--output_dir", str(OUTPUT_DIR),
@@ -201,13 +203,14 @@ def run_training(code_dir, tok_dir):
 
 def save_outputs():
     logger.info("Saving outputs...")
-    ckpts = list(OUTPUT_DIR.glob("*.pt")) + list(OUTPUT_DIR.glob("*.pth"))
-    for ckpt in ckpts:
-        final_path = WORK_DIR / ckpt.name
-        ckpt.rename(final_path)
-        logger.info(f"Checkpoint saved: {final_path}")
+    patterns = ["*.safetensors", "*.pt", "*.pth", "*_meta.json"]
+    for pattern in patterns:
+        for p in OUTPUT_DIR.glob(pattern):
+            final_path = WORK_DIR / p.name
+            p.rename(final_path)
+            logger.info(f"Saved: {final_path}")
 
-    logs = list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.log"))
+    logs = list(OUTPUT_DIR.glob("*.log"))
     for log in logs:
         final_path = WORK_DIR / log.name
         log.rename(final_path)

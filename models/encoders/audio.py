@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -68,7 +67,7 @@ class Wav2Vec2Encoder(nn.Module):
         if isinstance(self._encoder, _SpectrogramEncoder):
             return self._encoder(audio, attention_mask, return_frames)
         out = self._encoder(audio, attention_mask=attention_mask)
-        hs = out.last_hidden_state
+        hs = out.last_hidden_state.float()
         if attention_mask is not None:
             feat_lengths = self._encoder._get_feat_extract_output_lengths(
                 attention_mask.sum(dim=1)
@@ -112,7 +111,7 @@ class WavLMEncoder(nn.Module):
         if isinstance(self._encoder, _SpectrogramEncoder):
             return self._encoder(audio, attention_mask, return_frames)
         out = self._encoder(audio, attention_mask=attention_mask)
-        hs = out.last_hidden_state
+        hs = out.last_hidden_state.float()
         if attention_mask is not None:
             feat_lengths = self._encoder._get_feat_extract_output_lengths(
                 attention_mask.sum(dim=1)
