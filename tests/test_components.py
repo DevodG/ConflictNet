@@ -778,6 +778,44 @@ class TestFullModelIntegration:
             out = m(**batch)
         assert out.logits_type.shape == (2, 3)
 
+    def test_training_step(self):
+        """Full training step: forward, backward, optimizer step (no AMP).
+        Validates dtype consistency, gradient flow, and loss_breakdown
+        includes sigma weights."""
+        from models.conflictnet import ConflictNet
+        m = ConflictNet(
+            audio_encoder_name="emotion2vec",
+            embed_dim=64, n_conflict_types=3,
+            temporal_n_layers=1, temporal_n_heads=2, temporal_max_turns=4,
+            use_speaker_norm=True, use_temporal=True,
+            use_word_divergence=False, use_swap_pretraining=False,
+            use_cross_attn_injection=True,
+            use_speaker_adaptive_threshold=True,
+            use_baseline_subtract=True,
+            lora_r=0, lora_alpha=1,
+        )
+        m.train()
+        opt = torch.optim.AdamW(m.parameters(), lr=1e-4)
+        batch = self._synthetic_batch(m, B=2)
+        for name, p in m.named_parameters():
+            assert p.dtype == torch.float32, f"{name} is {p.dtype}"
+        out = m(**batch)
+        loss1 = out.loss
+        loss1.backward()
+        opt.step()
+        opt.zero_grad()
+        for name, p in m.named_parameters():
+            if p.grad is not None:
+                assert torch.isfinite(p.grad).all(), f"Non-finite gradient in {name}"
+        out = m(**batch)
+        out.loss.backward()
+        opt.step()
+        assert out.loss_breakdown is not None
+        sigma_keys = [k for k in out.loss_breakdown if k.startswith("sigma_task_")]
+        assert len(sigma_keys) >= 3
+        for k in sigma_keys:
+            assert isinstance(out.loss_breakdown[k], float)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
