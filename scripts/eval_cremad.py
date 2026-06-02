@@ -48,7 +48,7 @@ with torch.no_grad():
         if out.severity is not None:
             all_sev_pred.append(out.severity.squeeze(-1).cpu().numpy())
         if "severity" in b:
-            all_sev_true.append(b["severity"].numpy())
+            all_sev_true.append(b["severity"].squeeze(-1).numpy())
 
 elapsed = time.time() - t0
 probs = np.concatenate(all_probs)

@@ -86,9 +86,11 @@ def compute_all_metrics(
 
     # Severity metrics
     if severity_pred is not None and severity_true is not None:
-        mask = ~np.isnan(severity_true)
+        sev_t = np.asarray(severity_true).ravel()
+        sev_p = np.asarray(severity_pred).ravel()
+        mask = ~np.isnan(sev_t)
         if mask.sum() > 0:
-            metrics["severity_mae"] = mean_absolute_error(severity_true[mask], severity_pred[mask])
+            metrics["severity_mae"] = mean_absolute_error(sev_t[mask], sev_p[mask])
 
     return metrics
 
