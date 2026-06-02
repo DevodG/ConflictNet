@@ -2,7 +2,6 @@
 """Connect to Lightning AI and run ConflictNet training on H200."""
 
 import os
-import sys
 import time
 
 from lightning_sdk import User, Teamspace, Studio
@@ -59,4 +58,4 @@ CMD = (
     f"> training.log 2>&1 &"
 )
 r = studio.run(CMD)
-print(f"Training launched. Check progress with: tail -f training.log")
+print("Training launched. Check progress with: tail -f training.log")

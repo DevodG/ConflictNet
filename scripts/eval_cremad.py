@@ -38,7 +38,7 @@ def main():
     print(f"Model: {ec.get('audio_encoder', 'wavlm')}, params: {sum(p.numel() for p in model.parameters()):,}")
 
     ds = CREMADDataset(CREMAD, split="val")
-    loader = DataLoader(ds, batch_size=32, shuffle=False, num_workers=2, collate_fn=make_collate_fn())
+    loader = DataLoader(ds, batch_size=32, shuffle=False, num_workers=2, pin_memory=True, collate_fn=make_collate_fn())
 
     all_probs, all_labels, all_sev_pred, all_sev_true = [], [], [], []
     t0 = time.time()
