@@ -391,7 +391,7 @@ class MUStARDDataset(Dataset):
         target_train = int(len(all_samples) * train_ratio)
         for sid in speaker_ids:
             samples = speaker_groups[sid]
-            if len(train_items) + len(samples) <= target_train or not val_items:
+            if not train_items or len(train_items) + len(samples) <= target_train:
                 train_items.extend(samples)
             else:
                 val_items.extend(samples)
@@ -524,7 +524,7 @@ class CREMADDataset(Dataset):
         target_train = int(len(all_samples) * train_ratio)
         for sid in speaker_ids:
             samples = speaker_groups[sid]
-            if len(train_items) + len(samples) <= target_train or not val_items:
+            if not train_items or len(train_items) + len(samples) <= target_train:
                 train_items.extend(samples)
             else:
                 val_items.extend(samples)

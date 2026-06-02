@@ -175,7 +175,7 @@ def run_training(code_dir, tok_dir):
     args = [
         sys.executable, str(train_script),
         "--cremad_root", str(CREMAD_DIR),
-        "--epochs", "30",
+        "--epochs", "20",
         "--batch_size", "8",
         "--lr", "5e-5",
         "--audio_encoder", "wavlm",

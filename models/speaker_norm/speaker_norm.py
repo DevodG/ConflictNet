@@ -364,8 +364,8 @@ class SpeakerNormalizer(nn.Module):
                     savedir=f"pretrained_models/{self._model_source.replace('/', '_')}",
                 )
                 logger.info(f"[SpeakerNorm] Loaded ECAPA-TDNN from {self._model_source}")
-            except ImportError:
-                logger.warning("[SpeakerNorm] SpeechBrain not installed — speaker embedding disabled")
+            except Exception:
+                logger.warning("[SpeakerNorm] SpeechBrain unavailable — speaker embedding disabled")
                 self._spk_model = "disabled"
         return self._spk_model
 
