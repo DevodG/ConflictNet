@@ -19,7 +19,7 @@ print(path)
 ")
 echo "CREMA-D at: $CREMAD_PATH"
 
-# ── Run training ───────────────────────────────────────────────────────
+# ── Run training with auto-retry ────────────────────────────────────────
 echo "Starting training on H200..."
 python scripts/train.py \
   --cremad_root "$CREMAD_PATH" \
@@ -30,8 +30,16 @@ python scripts/train.py \
   --gradient_accumulation_steps 1 \
   --pretrain_epochs 5 \
   --amp \
-  --output_dir checkpoints
+  --output_dir checkpoints \
+  --target_f1 0.78 \
+  --max_retries 2 \
+  --resume_epochs 10
 
 echo "=== Training complete! ==="
 echo "Checkpoints saved to: checkpoints/"
 ls -la checkpoints/
+
+# ── Summary ────────────────────────────────────────────────────────────
+if [ -f checkpoints/best_model_meta.json ]; then
+  python3 -c "import json; m=json.load(open('checkpoints/best_model_meta.json')); print(f'Best val F1: {m[\"best_val_f1\"]:.4f} (epoch {m[\"epoch\"]})')"
+fi
