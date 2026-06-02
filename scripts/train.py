@@ -69,6 +69,12 @@ def parse_args(argv=None):
                    help="Enable automatic mixed precision (fp16) training")
     p.add_argument("--tokenizer_path", type=str, default=None,
                    help="Path to local tokenizer directory (avoids HuggingFace download)")
+    p.add_argument("--target_f1", type=float, default=0.0,
+                   help="Target val F1. If not met after training, resume with halved LR (0 = disable)")
+    p.add_argument("--max_retries", type=int, default=0,
+                   help="Max times to continue training if below target_f1")
+    p.add_argument("--resume_epochs", type=int, default=10,
+                   help="Additional epochs per retry")
     return p.parse_args()
 
 
@@ -186,7 +192,7 @@ def main():
     logger.info(f"Total trainable parameters: {total_trainable:,}")
 
     # --- Trainer ---
-    from training.trainer import ConflictNetTrainer
+    from training.trainer import ConflictNetTrainer, get_warmup_cosine_scheduler
     from models.experiment_config import ExperimentConfig
 
     exp_config = ExperimentConfig.from_args(args)
@@ -205,7 +211,48 @@ def main():
     if args.resume_from:
         start_epoch = trainer.load_checkpoint(args.resume_from)
 
-    trainer.train(n_epochs=args.epochs, pretrain_epochs=args.pretrain_epochs, start_epoch=start_epoch)
+    retries = 0
+    while True:
+        trainer.train(n_epochs=args.epochs, pretrain_epochs=args.pretrain_epochs, start_epoch=start_epoch)
+
+        if args.max_retries <= 0 or args.target_f1 <= 0:
+            break
+
+        meta_path = Path(args.output_dir) / "best_model_meta.json"
+        best_f1 = 0.0
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            best_f1 = meta.get("best_val_f1", 0.0)
+
+        logger.info(f"[Retry {retries+1}/{args.max_retries}] Best val F1 = {best_f1:.4f}, target = {args.target_f1}")
+
+        if best_f1 >= args.target_f1:
+            logger.info(f"Target F1 {args.target_f1} reached!")
+            break
+
+        if retries >= args.max_retries:
+            logger.info(f"Max retries ({args.max_retries}) exhausted, best F1 = {best_f1:.4f}")
+            break
+
+        retries += 1
+        args.lr = float(args.lr) / 2
+        args.resume_from = str(Path(args.output_dir) / "best_model.safetensors")
+        args.epochs = args.resume_epochs
+        args.pretrain_epochs = 0
+
+        logger.info(f"Resuming (retry {retries}/{args.max_retries}, lr={args.lr:.2e}, +{args.epochs} epochs)")
+        start_epoch = trainer.load_checkpoint(args.resume_from)
+
+        # Reset scheduler for continuation — cosine decays new_lr → 0 over resume_epochs
+        for g in trainer.optimizer.param_groups:
+            g["lr"] = args.lr
+        steps_per_epoch = len(trainer.train_loader)
+        trainer.scheduler = get_warmup_cosine_scheduler(
+            trainer.optimizer,
+            num_warmup_steps=0,
+            num_training_steps=steps_per_epoch * args.epochs,
+        )
 
 
 if __name__ == "__main__":
