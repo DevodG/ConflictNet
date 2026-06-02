@@ -238,11 +238,12 @@ def main():
         retries += 1
         args.lr = float(args.lr) / 2
         args.resume_from = str(Path(args.output_dir) / "best_model.safetensors")
-        args.epochs = args.resume_epochs
         args.pretrain_epochs = 0
 
-        logger.info(f"Resuming (retry {retries}/{args.max_retries}, lr={args.lr:.2e}, +{args.epochs} epochs)")
         start_epoch = trainer.load_checkpoint(args.resume_from)
+        args.epochs = start_epoch + args.resume_epochs
+
+        logger.info(f"Resuming (retry {retries}/{args.max_retries}, lr={args.lr:.2e}, epochs {start_epoch}–{args.epochs-1})")
 
         # Reset scheduler for continuation — cosine decays new_lr → 0 over resume_epochs
         for g in trainer.optimizer.param_groups:
@@ -251,7 +252,7 @@ def main():
         trainer.scheduler = get_warmup_cosine_scheduler(
             trainer.optimizer,
             num_warmup_steps=0,
-            num_training_steps=steps_per_epoch * args.epochs,
+            num_training_steps=steps_per_epoch * args.resume_epochs,
         )
 
 
