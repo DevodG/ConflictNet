@@ -27,7 +27,7 @@ import json
 import logging
 import os
 import random
-import math
+import re as _re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -257,11 +257,10 @@ class IEMOCAPDataset(Dataset):
                             "text": text,
                             "emotion": emotion,
                             "conflict_binary": int(conflict),
-                            "conflict_type_labels": [0, int(conflict), 0],  # [sarcasm, suppression, deception] — proxy: suppression only
-                            "severity": float("nan"),  # no real severity annotation in IEMOCAP
-                            "has_real_type_labels": False,  # only suppression proxy available
-                            "speaker_id": utt_id[:6],  # e.g. 'Ses01F' — session+gender uniquely identifies speaker
-                            "gender": "F" if utt_id[5] == "F" else "M",
+                            "conflict_type_labels": [0, int(conflict), 0],  # [sarcasm, suppression, deception]
+                            "severity": float(conflict),  # binary proxy; no real severity annotation in IEMOCAP
+                        "speaker_id": utt_id[:6],  # e.g. 'Ses01F' — session+gender uniquely identifies speaker
+                        "gender": "F" if utt_id[5] == "F" else "M",
                             "conversation_id": conv_id,
                             "turn_index": turn_idx,
                         })
@@ -308,8 +307,10 @@ class IEMOCAPDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
-            "severity": torch.tensor(item["severity"], dtype=torch.float),
-            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
+            # IEMOCAP has no conflict-severity annotation; NaN makes the
+            # model/evaluator exclude this proxy target.
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(False),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": text,
@@ -425,9 +426,9 @@ class MUStARDDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(sarcasm, dtype=torch.long),
-            "conflict_type_labels": torch.tensor([sarcasm, 0, 0], dtype=torch.float),  # real sarcasm labels
-            "severity": torch.tensor(float("nan"), dtype=torch.float),  # no real severity in MUStARD++
-            "has_real_type_labels": torch.tensor(True, dtype=torch.bool),  # real sarcasm labels
+            "conflict_type_labels": torch.tensor([sarcasm, 0, 0], dtype=torch.float),
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(True),
             "speaker_id": item["speaker_id"],
             "gender": None,
             "text": item["text"],
@@ -509,9 +510,8 @@ class CREMADDataset(Dataset):
                 "text": text,
                 "emotion": CREMAD_EMOTIONS.get(emotion, emotion.lower()),
                 "conflict_binary": int(conflict),
-                "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
-                "severity": float("nan"),  # no real severity annotation in CREMA-D
-                "has_real_type_labels": False,  # only suppression proxy available
+                "conflict_type_labels": [0, int(conflict), 0],
+                "severity": float(conflict),
                 "speaker_id": f"cremad_{actor_id}",
                 "gender": None,
             })
@@ -533,6 +533,8 @@ class CREMADDataset(Dataset):
                 train_items.extend(samples)
             else:
                 val_items.extend(samples)
+        if split == "all":
+            return all_samples
         return train_items if split == "train" else val_items
 
     def __len__(self) -> int:
@@ -560,7 +562,8 @@ class CREMADDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
-            "severity": torch.tensor(item["severity"], dtype=torch.float),
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(False),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
@@ -659,9 +662,8 @@ class MELDDataset(Dataset):
                     "dialogue_id": dia_id,
                     "utterance_id": int(utt_id) if utt_id.isdigit() else 0,
                     "conflict_binary": int(conflict),
-                    "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
-                    "severity": float("nan"),  # no real severity annotation in MELD
-                    "has_real_type_labels": False,  # only suppression proxy available
+                    "conflict_type_labels": [0, int(conflict), 0],  # suppression
+                    "severity": float(conflict),  # binary proxy; no real severity in MELD
                     "speaker_id": f"meld_{speaker}",
                     "gender": None,
                 })
@@ -692,8 +694,8 @@ class MELDDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
-            "severity": torch.tensor(item["severity"], dtype=torch.float),
-            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(False),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
@@ -798,9 +800,8 @@ class CMUMOSEIDataset(Dataset):
                     "emotion": emotion,
                     "utterance_id": uid,
                     "conflict_binary": int(conflict),
-                    "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
-                    "severity": float("nan"),  # no real severity annotation in CMU-MOSEI
-                    "has_real_type_labels": False,  # only suppression proxy available
+                    "conflict_type_labels": [0, int(conflict), 0],  # suppression
+                    "severity": float(conflict),  # binary proxy; no real severity in CMU-MOSEI
                     "speaker_id": f"mosei_{speaker_prefix}",
                     "gender": None,
                 })
@@ -835,8 +836,8 @@ class CMUMOSEIDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
-            "severity": torch.tensor(item["severity"], dtype=torch.float),
-            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(False),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
@@ -935,7 +936,9 @@ class CASEDataset(Dataset):
                 emotion = row.get("emotion", "neutral").strip().lower()
                 speaker_id = row.get("speaker_id", f"unknown_{i}")
                 gender = row.get("gender", None)
-                severity = float(row.get("severity", 0.7 if emotion in CASE_CONFLICT_EMOTIONS else 0.1))
+                # Severity is optional. Do not manufacture a regression
+                # target from the binary emotion-derived conflict label.
+                severity = float(row["severity"]) if row.get("severity") is not None else float("nan")
                 type_labels = CASE_TYPE_MAP.get(emotion, [0, 0, 0])
                 conflict_binary = 1 if emotion in CASE_CONFLICT_EMOTIONS else 0
 
@@ -952,7 +955,6 @@ class CASEDataset(Dataset):
                     "conflict_binary": conflict_binary,
                     "conflict_type_labels": type_labels,
                     "severity": severity,
-                    "has_real_type_labels": True,  # real multi-type labels and severity from metadata
                     "speaker_id": speaker_id,
                     "gender": gender,
                 })
@@ -991,11 +993,11 @@ class CASEDataset(Dataset):
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
             "severity": torch.tensor(item["severity"], dtype=torch.float),
-            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
+            "has_real_type_labels": torch.tensor(True),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
-            "utterance_id": Path(item["wav_path"]).stem,
+            "utterance_id": Path(item["wav_path"]).stem if item["wav_path"] is not None else f"case_{idx}",
             "word_timestamps": word_timestamps,
             "token_word_boundaries": token_word_boundaries,
         }
@@ -1061,7 +1063,8 @@ class GoEmotionsDataset(Dataset):
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(0, dtype=torch.long),
             "conflict_type_labels": torch.tensor([0, 0, 0], dtype=torch.float),
-            "severity": torch.tensor(0.0, dtype=torch.float),
+            "severity": torch.tensor(float("nan"), dtype=torch.float),
+            "has_real_type_labels": torch.tensor(False),
             "speaker_id": f"goemotions_{idx}",
             "gender": None,
             "text": item["text"],
@@ -1142,7 +1145,9 @@ def _collate_core(
         "conflict_binary": torch.stack([b["conflict_binary"] for b in batch]).float(),
         "conflict_type_labels": torch.stack([b["conflict_type_labels"] for b in batch]),
         "severity": torch.stack([b["severity"] for b in batch]).unsqueeze(-1),
-        "has_real_type_labels": torch.stack([b["has_real_type_labels"] for b in batch]),
+        "has_real_type_labels": torch.stack([
+            b.get("has_real_type_labels", torch.tensor(False)) for b in batch
+        ]).bool(),
         "speaker_ids": speaker_ids,
         "genders": genders,
         "conversation_ids": conversation_ids,
@@ -1174,4 +1179,3 @@ def make_collate_fn(
 def conflictnet_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Default collate function without augmentation."""
     return _collate_core(batch, augmentor=None)
-

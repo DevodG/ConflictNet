@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,7 +34,7 @@ class PredictResponse(BaseModel):
 # ── Predict batch ───────────────────────────────────────────────────────────
 
 class BatchItem(BaseModel):
-    audio: Any = Field(..., description="Raw WAV bytes (base64-encoded)")
+    audio: str = Field(..., description="Base64-encoded WAV bytes")
     text: str = Field(..., description="Utterance text")
     context_embeds: Optional[List[List[float]]] = Field(
         None, description="Past turn embeddings (T_turns, embed_dim)"

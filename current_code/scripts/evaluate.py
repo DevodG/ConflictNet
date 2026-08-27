@@ -66,17 +66,9 @@ def main():
         args.device = resolve_device()
 
     # --- Load model ---
-    from models.conflictnet import ConflictNet
-
     checkpoint_path = args.checkpoint
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
-
-    ckpt = load_checkpoint_state(checkpoint_path, device=args.device)
-    model_state = extract_model_state(ckpt)
-    model = ConflictNet()
-    model.load_state_dict(model_state, strict=False)
-    model.to(args.device)
-    model.eval()
+    from models.checkpoint_utils import load_conflictnet_model
+    model, _ = load_conflictnet_model(checkpoint_path, device=args.device)
     logger.info(f"[Eval] Loaded checkpoint from {args.checkpoint}")
 
     # Load pre-computed prosody z-scores if available
@@ -125,7 +117,7 @@ def main():
     eval_loader = DataLoader(eval_set, **loader_kwargs)
 
     # --- Run inference ---
-    all_probs, all_labels, all_genders = [], [], []
+    all_probs, all_labels, all_real_type_masks, all_genders = [], [], [], []
     all_severity_pred, all_severity_true = [], []
     sample_audio = []
 
@@ -145,6 +137,7 @@ def main():
             )
             all_probs.append(out.probs_type.cpu().numpy())
             all_labels.append(batch["conflict_type_labels"].numpy())
+            all_real_type_masks.append(batch["has_real_type_labels"].numpy())
             if out.severity is not None:
                 all_severity_pred.append(out.severity.squeeze(-1).cpu().numpy())
                 all_severity_true.append(batch["severity"].squeeze(-1).numpy())
@@ -155,13 +148,21 @@ def main():
 
     all_probs = np.concatenate(all_probs, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
+    real_type_mask = np.concatenate(all_real_type_masks, axis=0).astype(bool)
 
     # --- Metrics ---
     from evaluation.metrics import compute_all_metrics, print_metrics
 
     sev_pred = np.concatenate(all_severity_pred) if all_severity_pred else None
     sev_true = np.concatenate(all_severity_true) if all_severity_true else None
-    metrics = compute_all_metrics(all_probs, all_labels, sev_pred, sev_true)
+    if not real_type_mask.any():
+        raise ValueError("No samples have real conflict subtype labels; refusing to report subtype metrics on proxies")
+    metrics = compute_all_metrics(
+        all_probs[real_type_mask], all_labels[real_type_mask],
+        sev_pred[real_type_mask] if sev_pred is not None else None,
+        sev_true[real_type_mask] if sev_true is not None else None,
+    )
+    metrics["n_real_type_labels"] = int(real_type_mask.sum())
     print_metrics(metrics)
 
     with open(out_dir / "metrics.json", "w") as f:

@@ -42,6 +42,7 @@ class ExperimentConfig:
     amp: bool = False
     focal_loss_gamma: float = 0.0
     label_smoothing: float = 0.0
+    separation_lambda: float = 0.1
 
     # ── Ablation toggles ────────────────────────────────────────────────
     use_speaker_norm: bool = True

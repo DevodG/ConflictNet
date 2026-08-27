@@ -372,18 +372,9 @@ def main():
     device = torch.device(args.device)  # type: ignore
 
     # --- Load model ---
-    from models.conflictnet import ConflictNet
-
     checkpoint_path = args.checkpoint
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
-
-    ckpt = load_checkpoint_state(checkpoint_path, device=device)
-    model_state = extract_model_state(ckpt)
-
-    model = ConflictNet()
-    model.load_state_dict(model_state, strict=False)
-    model.to(device)
-    model.eval()
+    from models.checkpoint_utils import load_conflictnet_model
+    model, _ = load_conflictnet_model(checkpoint_path, device=device)
     logger.info(f"[Calib] Loaded checkpoint from {args.checkpoint}")
 
     # --- Inference per source ---

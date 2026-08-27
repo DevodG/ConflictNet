@@ -81,11 +81,15 @@ class ConflictNetTrainer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        from models.device_utils import device_supports_amp
+        from models.device_utils import device_supports_amp, device_supports_bf16
 
         self.use_amp = cfg.get("amp", False) and device_supports_amp(device)
+        self.use_bf16 = cfg.get("bf16", False) and device_supports_bf16(device)
+        self.amp_dtype = torch.bfloat16 if self.use_bf16 else torch.float16
+        
         self.grad_scaler: Optional[torch.amp.GradScaler] = None
-        if self.use_amp:
+        # BF16 doesn't need GradScaler in PyTorch 2.0+ (gradients don't underflow)
+        if self.use_amp and not self.use_bf16:
             self.grad_scaler = torch.amp.GradScaler(device)
 
         self._setup_optimizer()
@@ -93,7 +97,6 @@ class ConflictNetTrainer:
 
         self.global_step = 0
         self.best_val_f1 = 0.0
-        self._best_val_f1 = 0.0
         self._patience_counter = 0
         self.ctx_cache = ContextCache(
             max_turns=cfg.get("temporal_max_turns", 8),
@@ -134,6 +137,10 @@ class ConflictNetTrainer:
 
     def train_epoch(self, epoch: int, pretraining: bool = False) -> Dict[str, float]:
         self.model.train()
+        # Context is an ordered, within-epoch feature. Retaining it across
+        # epochs would make the last turn of an old epoch visible to the first
+        # turn of the next one.
+        self.ctx_cache.clear()
         total_loss = 0.0
         n_batches = 0
 
@@ -167,7 +174,7 @@ class ConflictNetTrainer:
                     str_conv_ids, embed_dim=getattr(self.model, "embed_dim", 256)
                 )
 
-            with torch.autocast(device_type=self.device, enabled=self.use_amp):
+            with torch.autocast(device_type=self.device, enabled=self.use_amp, dtype=self.amp_dtype):
                 output = self.model(
                     audio=batch["audio"],
                     input_ids=batch["input_ids"],
@@ -182,9 +189,9 @@ class ConflictNetTrainer:
                     conflict_type_labels=batch.get("conflict_type_labels"),
                     severity_labels=batch.get("severity"),
                     conflict_binary_labels=batch.get("conflict_binary"),
+                    has_real_type_labels=batch.get("has_real_type_labels"),
                     pretraining=pretraining,
                 )
-
             # Update context cache with current turn fused embeddings
             if str_conv_ids and output.fused_embed is not None:
                 self.ctx_cache.batch_update(str_conv_ids, output.fused_embed)
@@ -244,16 +251,16 @@ class ConflictNetTrainer:
     @torch.no_grad()
     def evaluate(self) -> Dict[str, float]:
         from sklearn.metrics import f1_score  # type: ignore
+        from models.device_utils import supports_non_blocking
 
         self.model.eval()
         # Clear context cache to prevent training dialogue context from
         # leaking into validation (fixes L3 data leakage path)
         self.ctx_cache.clear()
         all_preds, all_labels = [], []
+        non_block = supports_non_blocking(self.device)
 
         for batch in self.val_loader:
-            from models.device_utils import supports_non_blocking
-            non_block = supports_non_blocking(self.device)
             batch = {
                 k: v.to(self.device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
@@ -262,7 +269,7 @@ class ConflictNetTrainer:
             ctx_embeds, ctx_padding, _ = self.ctx_cache.get_batch_context(
                 conv_ids, embed_dim=getattr(self.model, "embed_dim", 256)
             ) if conv_ids else (None, None, [])
-            with torch.autocast(device_type=self.device, enabled=self.use_amp):
+            with torch.autocast(device_type=self.device, enabled=self.use_amp, dtype=self.amp_dtype):
                 output = self.model(
                 audio=batch["audio"],
                 input_ids=batch["input_ids"],
@@ -275,6 +282,10 @@ class ConflictNetTrainer:
                 word_timestamps=batch.get("word_timestamps"),
                 token_word_boundaries=batch.get("token_word_boundaries"),
             )
+            # Build validation history causally after predicting the current
+            # turn, so it is available only to later turns.
+            if conv_ids and output.fused_embed is not None:
+                self.ctx_cache.batch_update([str(cid) for cid in conv_ids], output.fused_embed)
             if output.conflict_flag is not None:
                 preds = output.conflict_flag.cpu().numpy().astype(int)
             else:
@@ -323,17 +334,13 @@ class ConflictNetTrainer:
             # Training state → .pt (optimizer/scheduler can't use safetensors)
             self._save_checkpoint(epoch)
 
-            # Save best checkpoint
-            if val_metrics.get("val/f1_weighted", 0) > self.best_val_f1:
-                self.best_val_f1 = val_metrics["val/f1_weighted"]
-                self._save_checkpoint(epoch, is_best=True)
-                logger.info(f"  ✓ New best val F1 = {self.best_val_f1:.4f}")
-
-            # Early stopping check
+            # Save best checkpoint + early stopping (unified tracker)
             val_f1 = val_metrics.get("val/f1_weighted", 0)
-            if val_f1 > self._best_val_f1:
-                self._best_val_f1 = val_f1
+            if val_f1 > self.best_val_f1:
+                self.best_val_f1 = val_f1
+                self._save_checkpoint(epoch, is_best=True)
                 self._patience_counter = 0
+                logger.info(f"  ✓ New best val F1 = {self.best_val_f1:.4f}")
             else:
                 self._patience_counter += 1
                 if self._patience_counter >= early_stop_patience:
@@ -449,7 +456,6 @@ class ConflictNetTrainer:
                     meta = _json.load(f)
                 self.global_step = meta.get("global_step", 0)
                 self.best_val_f1 = meta.get("best_val_f1", 0.0)
-                self._best_val_f1 = self.best_val_f1
                 resumed_epoch: int = meta.get("epoch", -1)
             else:
                 resumed_epoch = -1
@@ -471,7 +477,6 @@ class ConflictNetTrainer:
                 self.scheduler.load_state_dict(ckpt["scheduler_state_dict"])
             self.global_step = ckpt.get("global_step", 0)
             self.best_val_f1 = ckpt.get("best_val_f1", 0.0)
-            self._best_val_f1 = self.best_val_f1
             resumed_epoch = ckpt.get("epoch", -1)
 
         logger.info(f"Resumed from checkpoint at epoch {resumed_epoch + 1}, global_step={self.global_step}")

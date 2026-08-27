@@ -124,16 +124,16 @@ def main():
             setattr(args, key, val)
 
         # Auto-disable memory-heavy features not useful for single-utterance datasets
-        if args.no_word_divergence is False:
+        if not args.no_word_divergence:
             args.no_word_divergence = True
             logger.info("[MPS] Disabled word_divergence (requires MFA alignment)")
-        if args.no_temporal is False:
+        if not args.no_temporal:
             args.no_temporal = True
             logger.info("[MPS] Disabled temporal context (single-utterance dataset)")
-        if args.no_cross_attn_injection is False:
+        if not args.no_cross_attn_injection:
             args.no_cross_attn_injection = True
             logger.info("[MPS] Disabled cross-attn injection (no temporal context)")
-        if args.no_speaker_adaptive_threshold is False:
+        if not args.no_speaker_adaptive_threshold:
             args.no_speaker_adaptive_threshold = True
             logger.info("[MPS] Disabled speaker-adaptive threshold (reduces params)")
 

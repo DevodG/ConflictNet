@@ -17,6 +17,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 from typing import Any, Dict, Union
 
@@ -85,3 +86,51 @@ def extract_model_state(
     checkpoints containing a ``model_state_dict`` key.
     """
     return checkpoint.get("model_state_dict", checkpoint)
+
+
+def load_conflictnet_model(
+    path: Union[str, Path],
+    device: Union[str, torch.device] = "cpu",
+):
+    """Reconstruct ConflictNet from checkpoint metadata and load it safely.
+
+    Rebuilding with constructor defaults is a silent and serious source of
+    invalid evaluation (audio encoder, LoRA, ablation toggles, and embedding
+    size can all differ from training). The trainer writes these values to the
+    sibling ``*_meta.json`` file, so every inference entry point should use
+    this helper.
+    """
+    from models.conflictnet import ConflictNet
+
+    checkpoint_path = Path(path)
+    state = extract_model_state(load_checkpoint_state(checkpoint_path, device=device))
+    meta_path = checkpoint_path.parent / f"{checkpoint_path.stem}_meta.json"
+    config: Dict[str, Any] = {}
+    if meta_path.exists():
+        with meta_path.open(encoding="utf-8") as f:
+            config = json.load(f).get("experiment_config", {})
+    else:
+        logger.warning("No checkpoint metadata at %s; using constructor defaults", meta_path)
+
+    model = ConflictNet(
+        audio_encoder_name=config.get("audio_encoder", "emotion2vec"),
+        embed_dim=int(config.get("embed_dim", 256)),
+        lora_r=int(config.get("lora_r", 16)),
+        use_speaker_norm=bool(config.get("use_speaker_norm", True)),
+        use_temporal=bool(config.get("use_temporal", True)),
+        use_cross_attn_injection=bool(config.get("use_cross_attn_injection", True)),
+        use_speaker_adaptive_threshold=bool(config.get("use_speaker_adaptive_threshold", True)),
+        use_baseline_subtract=bool(config.get("use_baseline_subtract", True)),
+        use_word_divergence=bool(config.get("use_word_divergence", True)),
+        temporal_max_turns=int(config.get("temporal_max_turns", 16)),
+        focal_loss_gamma=float(config.get("focal_loss_gamma", 0.0)),
+        label_smoothing=float(config.get("label_smoothing", 0.0)),
+        separation_lambda=float(config.get("separation_lambda", 0.1)),
+    )
+    incompatible = model.load_state_dict(state, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise RuntimeError(
+            f"Checkpoint/model mismatch for {checkpoint_path}: "
+            f"missing={incompatible.missing_keys}, unexpected={incompatible.unexpected_keys}"
+        )
+    return model.to(device).eval(), config

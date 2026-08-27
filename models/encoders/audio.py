@@ -36,9 +36,10 @@ class _SpectrogramEncoder(nn.Module):
     def forward(self, audio, attention_mask=None, return_frames=False):
         spec = torch.stft(audio, n_fft=512, hop_length=160, window=self.hann,
                           return_complex=True).abs()
-        pooled = self.conv(spec).mean(dim=-1)
+        conv_out = self.conv(spec)  # (B, output_dim, T')
+        pooled = conv_out.mean(dim=-1)
         if return_frames:
-            frames = self.conv(spec).permute(0, 2, 1)
+            frames = conv_out.permute(0, 2, 1)  # (B, T', output_dim)
             return pooled, frames
         return pooled
 
@@ -165,6 +166,8 @@ class Emotion2VecEncoder(nn.Module):
         return self._model(audio, attention_mask=attention_mask, return_frames=return_frames)
 
     def _forward_funasr(self, audio):
+        # TODO: funasr's AutoModel.generate() doesn't support batched input;
+        # loop per-sample is unavoidable until upstream adds batch support.
         audio_np = audio.cpu().numpy()
         results = []
         for i in range(audio_np.shape[0]):

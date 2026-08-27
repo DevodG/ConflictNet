@@ -97,7 +97,6 @@ class ConflictNetTrainer:
 
         self.global_step = 0
         self.best_val_f1 = 0.0
-        self._best_val_f1 = 0.0
         self._patience_counter = 0
         self.ctx_cache = ContextCache(
             max_turns=cfg.get("temporal_max_turns", 8),
@@ -252,16 +251,16 @@ class ConflictNetTrainer:
     @torch.no_grad()
     def evaluate(self) -> Dict[str, float]:
         from sklearn.metrics import f1_score  # type: ignore
+        from models.device_utils import supports_non_blocking
 
         self.model.eval()
         # Clear context cache to prevent training dialogue context from
         # leaking into validation (fixes L3 data leakage path)
         self.ctx_cache.clear()
         all_preds, all_labels = [], []
+        non_block = supports_non_blocking(self.device)
 
         for batch in self.val_loader:
-            from models.device_utils import supports_non_blocking
-            non_block = supports_non_blocking(self.device)
             batch = {
                 k: v.to(self.device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
@@ -335,17 +334,13 @@ class ConflictNetTrainer:
             # Training state → .pt (optimizer/scheduler can't use safetensors)
             self._save_checkpoint(epoch)
 
-            # Save best checkpoint
-            if val_metrics.get("val/f1_weighted", 0) > self.best_val_f1:
-                self.best_val_f1 = val_metrics["val/f1_weighted"]
-                self._save_checkpoint(epoch, is_best=True)
-                logger.info(f"  ✓ New best val F1 = {self.best_val_f1:.4f}")
-
-            # Early stopping check
+            # Save best checkpoint + early stopping (unified tracker)
             val_f1 = val_metrics.get("val/f1_weighted", 0)
-            if val_f1 > self._best_val_f1:
-                self._best_val_f1 = val_f1
+            if val_f1 > self.best_val_f1:
+                self.best_val_f1 = val_f1
+                self._save_checkpoint(epoch, is_best=True)
                 self._patience_counter = 0
+                logger.info(f"  ✓ New best val F1 = {self.best_val_f1:.4f}")
             else:
                 self._patience_counter += 1
                 if self._patience_counter >= early_stop_patience:
@@ -461,7 +456,6 @@ class ConflictNetTrainer:
                     meta = _json.load(f)
                 self.global_step = meta.get("global_step", 0)
                 self.best_val_f1 = meta.get("best_val_f1", 0.0)
-                self._best_val_f1 = self.best_val_f1
                 resumed_epoch: int = meta.get("epoch", -1)
             else:
                 resumed_epoch = -1
@@ -483,7 +477,6 @@ class ConflictNetTrainer:
                 self.scheduler.load_state_dict(ckpt["scheduler_state_dict"])
             self.global_step = ckpt.get("global_step", 0)
             self.best_val_f1 = ckpt.get("best_val_f1", 0.0)
-            self._best_val_f1 = self.best_val_f1
             resumed_epoch = ckpt.get("epoch", -1)
 
         logger.info(f"Resumed from checkpoint at epoch {resumed_epoch + 1}, global_step={self.global_step}")

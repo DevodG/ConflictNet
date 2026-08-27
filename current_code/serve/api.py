@@ -9,6 +9,8 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import base64
+import binascii
 import logging
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any
@@ -27,6 +29,7 @@ from serve.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
@@ -56,7 +59,7 @@ def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origins,
-        allow_credentials=True,
+        allow_credentials=bool(cfg.cors_origins),
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -84,6 +87,8 @@ def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
         audio_bytes = await audio.read()
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="Empty audio file")
+        if len(audio_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Audio file exceeds 25 MiB limit")
 
         ctx = _parse_optional_json(context_embeds)
         pz = _parse_optional_json(prosody_z)
@@ -110,7 +115,7 @@ def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
         items: List[Dict[str, Any]] = []
         for item in request.items:
             items.append({
-                "audio": item.audio,
+                "audio": _decode_audio_base64(item.audio),
                 "text": item.text,
                 "context_embeds": item.context_embeds,
                 "prosody_z": item.prosody_z,
@@ -133,3 +138,16 @@ def _parse_optional_json(raw: Optional[str]) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {raw[:100]}")
+
+
+def _decode_audio_base64(encoded: str) -> bytes:
+    """Decode and size-limit JSON batch audio before model inference."""
+    try:
+        audio = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Batch audio must be valid base64")
+    if not audio:
+        raise HTTPException(status_code=400, detail="Empty audio payload")
+    if len(audio) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio payload exceeds 25 MiB limit")
+    return audio

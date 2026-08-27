@@ -85,10 +85,15 @@ class ServeModel:
         )
 
         result = self.model.load_state_dict(model_state, strict=False)
-        if result.missing_keys or result.unexpected_keys:
+        if result.unexpected_keys:
             raise RuntimeError(
-                "Checkpoint architecture does not match serving model. "
-                f"Missing={result.missing_keys}; unexpected={result.unexpected_keys}"
+                "Checkpoint contains unexpected keys (architecture mismatch): "
+                f"{result.unexpected_keys}"
+            )
+        if result.missing_keys:
+            logger.warning(
+                "Checkpoint missing keys (new params will use defaults): %s",
+                result.missing_keys,
             )
 
         self.model.to(self.device)

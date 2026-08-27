@@ -240,6 +240,7 @@ def compute_prosody_z_scores(
     use_baseline_subtract: bool = False,
     conflict_flags: Optional[List[bool]] = None,
     sr: int = 16000,
+    training_mode: bool = False,
 ) -> torch.Tensor:
     """Compute per-speaker prosody features (z-score or baseline-subtracted).
 
@@ -261,6 +262,9 @@ def compute_prosody_z_scores(
         conflict_flags: Per-utterance bool — used to update neutral baseline
             for non-conflict utterances when ``use_baseline_subtract`` is True.
         sr: Audio sample rate.
+        training_mode: If True, update speaker_registry and cold_start with
+            new utterances. If False (eval mode), only compute z-scores using
+            existing statistics. Default: False to prevent data leakage.
 
     Returns:
         CPU float32 tensor of shape (B, 3) — prosody features.
@@ -272,18 +276,20 @@ def compute_prosody_z_scores(
     for audio_np, spk_id, gender, is_conflict in zip(audio_np_list, speaker_ids, safe_genders, cf):
         stats_raw = extract_prosody_stats(audio_np, sr=sr)
         spk_stats = speaker_registry[spk_id]
-        spk_stats.update(
-            stats_raw["f0_mean"], stats_raw["energy_mean"], stats_raw["speaking_rate"]
-        )
-        cold_start.register_utterance(
-            stats_raw["f0_mean"], stats_raw["energy_mean"], stats_raw["speaking_rate"], gender
-        )
-
-        # Update neutral baseline for non-conflict (neutral) utterances
-        if use_baseline_subtract and not is_conflict:
-            spk_stats.update_baseline(
+        
+        if training_mode:
+            spk_stats.update(
                 stats_raw["f0_mean"], stats_raw["energy_mean"], stats_raw["speaking_rate"]
             )
+            cold_start.register_utterance(
+                stats_raw["f0_mean"], stats_raw["energy_mean"], stats_raw["speaking_rate"], gender
+            )
+
+            # Update neutral baseline for non-conflict (neutral) utterances
+            if use_baseline_subtract and not is_conflict:
+                spk_stats.update_baseline(
+                    stats_raw["f0_mean"], stats_raw["energy_mean"], stats_raw["speaking_rate"]
+                )
 
         best_stats = cold_start.get_stats(spk_stats, gender=gender)
 
@@ -390,6 +396,7 @@ class SpeakerNormalizer(nn.Module):
         use_baseline_subtract: bool = False,
         conflict_flags: Optional[List[bool]] = None,
         sr: int = 16000,
+        training_mode: bool = False,
     ) -> torch.Tensor:
         """**Preprocessing helper** — call this in the data loader / collate_fn,
         NOT inside the model forward pass.
@@ -407,6 +414,9 @@ class SpeakerNormalizer(nn.Module):
             conflict_flags: Per-utterance bool used to update neutral baseline
                 for non-conflict utterances.
             sr: Sample rate.
+            training_mode: If True, update speaker_registry and cold_start with
+                new utterances. If False (eval mode), only compute z-scores using
+                existing statistics. Default: False to prevent data leakage.
 
         Returns:
             CPU tensor of shape (B, 3) — prosody features.
@@ -420,6 +430,7 @@ class SpeakerNormalizer(nn.Module):
             use_baseline_subtract=use_baseline_subtract,
             conflict_flags=conflict_flags,
             sr=sr,
+            training_mode=training_mode,
         )
 
     # ------------------------------------------------------------------

@@ -23,7 +23,7 @@ def main():
     CKPT = "/teamspace/studios/this_studio/conflictnet/checkpoints/best_model.safetensors"
     META = "/teamspace/studios/this_studio/conflictnet/checkpoints/best_model_meta.json"
     from models.device_utils import resolve_device, supports_pin_memory, supports_non_blocking
-DEVICE = resolve_device()
+    DEVICE = resolve_device()
 
     with open(META) as f:
         meta = _json.load(f)

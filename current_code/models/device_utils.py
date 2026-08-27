@@ -23,6 +23,17 @@ def device_supports_amp(device: str) -> bool:
     return device in ("cuda", "mps")
 
 
+def device_supports_bf16(device: str) -> bool:
+    """Check if device supports BF16 (requires Ampere+ GPU or CPU with AVX-512)."""
+    if device != "cuda":
+        return False
+    if not torch.cuda.is_available():
+        return False
+    # BF16 supported on Ampere (sm_80) and newer
+    major, _ = torch.cuda.get_device_capability()
+    return major >= 8
+
+
 def supports_pin_memory(device: str) -> bool:
     return device == "cuda"
 

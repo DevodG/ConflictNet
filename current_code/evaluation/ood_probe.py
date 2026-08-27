@@ -88,18 +88,9 @@ def main():
         seen = {s.strip() for s in args.seen_speakers.split(",")}
 
     # --- Load model ---
-    from models.conflictnet import ConflictNet
-
     checkpoint_path = args.checkpoint
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
-
-    ckpt = load_checkpoint_state(checkpoint_path, device=device)
-    model_state = extract_model_state(ckpt)
-
-    model = ConflictNet()
-    model.load_state_dict(model_state, strict=False)
-    model.to(device)
-    model.eval()
+    from models.checkpoint_utils import load_conflictnet_model
+    model, _ = load_conflictnet_model(checkpoint_path, device=device)
     logger.info(f"[OOD-Probe] Loaded checkpoint from {args.checkpoint}")
 
     # --- Build dataset ---
@@ -151,7 +142,7 @@ def main():
     # --- Per-speaker tracking ---
     speaker_probs: Dict[str, List[np.ndarray]] = defaultdict(list)
     speaker_labels: Dict[str, List[np.ndarray]] = defaultdict(list)
-    all_probs, all_labels = [], []
+    all_probs, all_labels, all_real_type_masks = [], [], []
 
     with torch.no_grad():
         for batch in held_out_loader:
@@ -165,15 +156,47 @@ def main():
                 audio=batch_gpu["audio"],
                 input_ids=batch_gpu["input_ids"],
                 attention_mask=batch_gpu["attention_mask"],
+                audio_attention_mask=batch_gpu.get("audio_attention_mask"),
+                prosody_z=batch_gpu.get("prosody_z"),
+            )
+            probs = out.probs_type.cpu().numpy()
+            labels = batch["conflict_type_labels"].numpy()
+            all_probs.append(probs)
+            all_labels.append(labels)
+            real_mask = batch["has_real_type_labels"].numpy().astype(bool)
+            all_real_type_masks.append(real_mask)
+            for speaker_id, prob, label, is_real in zip(batch["speaker_ids"], probs, labels, real_mask):
+                if not is_real:
+                    continue
+                speaker_probs[str(speaker_id)].append(prob)
+                speaker_labels[str(speaker_id)].append(label)
 
-            # --- Compare with seen speakers (if provided) ---
+    from evaluation.metrics import compute_all_metrics
+
+    all_probs_arr = np.concatenate(all_probs, axis=0)
+    all_labels_arr = np.concatenate(all_labels, axis=0)
+    real_type_mask = np.concatenate(all_real_type_masks, axis=0).astype(bool)
+    if not real_type_mask.any():
+        raise ValueError("No held-out samples have real subtype labels; refusing proxy-label OOD metrics")
+    overall = compute_all_metrics(all_probs_arr[real_type_mask], all_labels_arr[real_type_mask])
+    per_speaker = {}
+    for speaker_id, probs in speaker_probs.items():
+        speaker_metrics = compute_all_metrics(
+            np.stack(probs), np.stack(speaker_labels[speaker_id])
+        )
+        per_speaker[speaker_id] = {
+            key: float(value) if isinstance(value, (np.floating, float)) else value
+            for key, value in speaker_metrics.items()
+        }
+
+    # --- Compare with seen speakers (if provided) ---
     seen_metrics = None
     if seen_set:
         seen_loader = DataLoader(
             seen_set, batch_size=args.batch_size, shuffle=False,
             num_workers=2, pin_memory=pin, collate_fn=conflictnet_collate_fn,
         )
-        seen_probs, seen_labels = [], []
+        seen_probs, seen_labels, seen_real_masks = [], [], []
         with torch.no_grad():
             for batch in seen_loader:
                 batch_gpu = {k: v.to(device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
@@ -184,17 +207,22 @@ def main():
                     attention_mask=batch_gpu["attention_mask"],
                     audio_attention_mask=batch_gpu.get("audio_attention_mask"),
                     prosody_z=batch_gpu.get("prosody_z"),
-
                 )
                 seen_probs.append(out.probs_type.cpu().numpy())
                 seen_labels.append(batch["conflict_type_labels"].numpy())
+                seen_real_masks.append(batch["has_real_type_labels"].numpy())
         seen_probs = np.concatenate(seen_probs, axis=0)
         seen_labels = np.concatenate(seen_labels, axis=0)
-        seen_metrics = compute_all_metrics(seen_probs, seen_labels)
+        seen_real_mask = np.concatenate(seen_real_masks, axis=0).astype(bool)
+        if seen_real_mask.any():
+            seen_metrics = compute_all_metrics(seen_probs[seen_real_mask], seen_labels[seen_real_mask])
+        else:
+            logger.warning("[OOD-Probe] Seen set has no real subtype labels; skipping comparison")
 
-        logger.info(f"[OOD-Probe] Seen macro_f1={seen_metrics['macro_f1']:.4f}, "
-                    f"OOD macro_f1={overall['macro_f1']:.4f}, "
-                    f"drop={seen_metrics['macro_f1'] - overall['macro_f1']:.4f}")
+        if seen_metrics is not None:
+            logger.info(f"[OOD-Probe] Seen macro_f1={seen_metrics['macro_f1']:.4f}, "
+                        f"OOD macro_f1={overall['macro_f1']:.4f}, "
+                        f"drop={seen_metrics['macro_f1'] - overall['macro_f1']:.4f}")
 
     # --- Save ---
     report: Dict[str, Any] = {

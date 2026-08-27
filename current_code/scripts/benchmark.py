@@ -106,6 +106,14 @@ def evaluate_on_dataset(
         num_workers=2, pin_memory=supports_pin_memory(device), collate_fn=collate,
     )
 
+    all_probs: List[np.ndarray] = []
+    all_labels: List[np.ndarray] = []
+    all_sev_pred: List[np.ndarray] = []
+    all_sev_true: List[np.ndarray] = []
+    all_real_type_masks: List[np.ndarray] = []
+    all_genders: List[Optional[str]] = []
+    all_speakers: List[Optional[str]] = []
+
     with torch.no_grad():
         for batch in loader:
             batch_gpu = {
@@ -121,6 +129,7 @@ def evaluate_on_dataset(
             )
             all_probs.append(out.probs_type.cpu().numpy())
             all_labels.append(batch["conflict_type_labels"].numpy())
+            all_real_type_masks.append(batch["has_real_type_labels"].numpy())
             if out.severity is not None:
                 all_sev_pred.append(out.severity.squeeze(-1).cpu().numpy())
             if "severity" in batch:
@@ -130,16 +139,22 @@ def evaluate_on_dataset(
 
     probs = np.concatenate(all_probs, axis=0)
     labels = np.concatenate(all_labels, axis=0)
+    real_type_mask = np.concatenate(all_real_type_masks, axis=0).astype(bool)
     sev_pred = np.concatenate(all_sev_pred) if all_sev_pred else None
     sev_true = np.concatenate(all_sev_true) if all_sev_true else None
 
     from evaluation.metrics import compute_all_metrics
 
-    metrics = compute_all_metrics(
-        probs, labels,
-        severity_pred=sev_pred, severity_true=sev_true,
-        type_names=TYPE_NAMES,
-    )
+    metrics: Dict[str, Any] = {"n_real_type_labels": int(real_type_mask.sum())}
+    if real_type_mask.any():
+        metrics.update(compute_all_metrics(
+            probs[real_type_mask], labels[real_type_mask],
+            severity_pred=sev_pred[real_type_mask] if sev_pred is not None else None,
+            severity_true=sev_true[real_type_mask] if sev_true is not None else None,
+            type_names=TYPE_NAMES,
+        ))
+    else:
+        logger.warning("[Bench] %s has no real subtype labels; metrics omitted", dataset_name)
 
     return {
         "dataset": dataset_name,
@@ -192,7 +207,12 @@ def load_model(checkpoint_path: str, device: str) -> torch.nn.Module:
         audio_encoder_name=audio_encoder,
         embed_dim=embed_dim,
     )
-    model.load_state_dict(model_state, strict=False)
+    incompatible = model.load_state_dict(model_state, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "Checkpoint architecture does not match the reconstructed model. "
+            f"Missing={incompatible.missing_keys}; unexpected={incompatible.unexpected_keys}"
+        )
     model.to(device)
     model.eval()
     logger.info(f"[Bench] Loaded checkpoint from {checkpoint_path}")

@@ -92,7 +92,9 @@ def compute_all_metrics(
     ece_per_class = []
     for i in range(n_types):
         confs = probs_type[:, i]
-        accs = preds_type[:, i]
+        # Calibration measures whether a confidence value matches the
+        # observed outcome, not whether it agrees with our own threshold.
+        accs = labels_type[:, i]
         ece_c = 0.0
         for b in range(n_bins):
             in_bin = (confs > bin_boundaries[b]) & (confs <= bin_boundaries[b + 1])

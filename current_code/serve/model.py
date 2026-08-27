@@ -48,37 +48,53 @@ class ServeModel:
 
         logger.info("Building model")
 
-        # Warn if serving config differs from training config (B1 fix)
+        # Read architecture config from sidecar _meta.json (B1 fix: use training config)
         meta_path = ckpt_path.parent / f"{ckpt_path.stem}_meta.json"
+        exp_cfg = {}
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = _json.load(f)
             exp_cfg = meta.get("experiment_config", {})
-            for key, val in [("audio_encoder", self.cfg.audio_encoder),
-                             ("embed_dim", self.cfg.embed_dim),
-                             ("lora_r", self.cfg.lora_r)]:
-                trained_val = exp_cfg.get(key)
-                if trained_val is not None and str(trained_val) != str(val):
-                    logger.warning(f"Serving {key}={val} differs from training {key}={trained_val}")
+            logger.info(f"Using training config from {meta_path}: audio_encoder={exp_cfg.get('audio_encoder')}, embed_dim={exp_cfg.get('embed_dim')}")
+        else:
+            logger.warning(f"No _meta.json found at {meta_path}, using serving config")
+
+        # Use training config if available, fall back to serving config
+        audio_encoder = exp_cfg.get("audio_encoder", self.cfg.audio_encoder)
+        embed_dim = exp_cfg.get("embed_dim", self.cfg.embed_dim)
+        use_speaker_norm = exp_cfg.get("use_speaker_norm", self.cfg.use_speaker_norm)
+        use_temporal = exp_cfg.get("use_temporal", self.cfg.use_temporal)
+        use_word_divergence = exp_cfg.get("use_word_divergence", self.cfg.use_word_divergence)
+        use_cross_attn_injection = exp_cfg.get("use_cross_attn_injection", self.cfg.use_cross_attn_injection)
+        use_speaker_adaptive_threshold = exp_cfg.get("use_speaker_adaptive_threshold", self.cfg.use_speaker_adaptive_threshold)
+        use_baseline_subtract = exp_cfg.get("use_baseline_subtract", self.cfg.use_baseline_subtract)
+        lora_r = exp_cfg.get("lora_r", self.cfg.lora_r)
+        temporal_max_turns = exp_cfg.get("temporal_max_turns", self.cfg.temporal_max_turns)
 
         self.model = ConflictNet(
-            audio_encoder_name=self.cfg.audio_encoder,
-            embed_dim=self.cfg.embed_dim,
-            use_speaker_norm=self.cfg.use_speaker_norm,
-            use_temporal=self.cfg.use_temporal,
-            use_word_divergence=self.cfg.use_word_divergence,
-            use_cross_attn_injection=self.cfg.use_cross_attn_injection,
-            use_speaker_adaptive_threshold=self.cfg.use_speaker_adaptive_threshold,
-            use_baseline_subtract=self.cfg.use_baseline_subtract,
-            lora_r=self.cfg.lora_r,
-            temporal_max_turns=self.cfg.temporal_max_turns,
+            audio_encoder_name=audio_encoder,
+            embed_dim=embed_dim,
+            use_speaker_norm=use_speaker_norm,
+            use_temporal=use_temporal,
+            use_word_divergence=use_word_divergence,
+            use_cross_attn_injection=use_cross_attn_injection,
+            use_speaker_adaptive_threshold=use_speaker_adaptive_threshold,
+            use_baseline_subtract=use_baseline_subtract,
+            lora_r=lora_r,
+            temporal_max_turns=temporal_max_turns,
         )
 
         result = self.model.load_state_dict(model_state, strict=False)
-        if result.missing_keys:
-            logger.warning(f"Missing keys: {result.missing_keys}")
         if result.unexpected_keys:
-            logger.warning(f"Unexpected keys: {result.unexpected_keys}")
+            raise RuntimeError(
+                "Checkpoint contains unexpected keys (architecture mismatch): "
+                f"{result.unexpected_keys}"
+            )
+        if result.missing_keys:
+            logger.warning(
+                "Checkpoint missing keys (new params will use defaults): %s",
+                result.missing_keys,
+            )
 
         self.model.to(self.device)
         self.model.eval()
