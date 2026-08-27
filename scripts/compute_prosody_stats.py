@@ -16,13 +16,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -119,31 +119,59 @@ def scan_mustard(
 ) -> List[ScanItem]:
     """Scan MUStARD for (path, speaker_id, gender, is_train).
 
-    If ``json_path`` is provided, the train/val split is determined
-    by the first 80% of JSON keys (training) vs the remaining 20%.
-    Without ``json_path``, all items are treated as training data.
+    Uses speaker-stratified split: group by speaker, assign whole speakers to train/val.
     """
-    # Load train keys from JSON if available
-    train_keys: set = set()
+    # Load data from JSON if available
+    data = {}
     if json_path and Path(json_path).exists():
         with open(json_path) as f:
             data = json.load(f)
-        all_keys = list(data.keys())
-        n_train = int(len(all_keys) * 0.8)
-        train_keys = set(all_keys[:n_train])
-        logger.info(f"[MUStARD] Loaded {len(train_keys)} training keys from {json_path}")
 
     items = []
     root_p = Path(root)
     wav_dirs = list(root_p.rglob("*.wav"))
+    
+    # Collect all samples with speaker info
+    all_samples = []
     for wav in wav_dirs:
         spk = wav.parent.stem
-        # Determine if this wav belongs to a training key
-        is_train = True  # default: all train
-        if train_keys:
-            # Check if any train key matches this filename
-            is_train = any(k in wav.stem for k in train_keys)
-        items.append((str(wav), f"mustard_{spk}", None, is_train))
+        # Find matching key in JSON data
+        matching_key = None
+        for key in data.keys():
+            if key in wav.stem:
+                matching_key = key
+                break
+        sarcasm = int(data.get(matching_key, {}).get("sarcasm", 0)) if matching_key else 0
+        all_samples.append({
+            "wav_path": str(wav),
+            "speaker_id": f"mustard_{spk}",
+            "sarcasm": sarcasm,
+        })
+
+    # Speaker-stratified split: group by speaker, assign whole speakers to train/val
+    speaker_groups: Dict[str, List[Dict]] = {}
+    for s in all_samples:
+        speaker_groups.setdefault(s["speaker_id"], []).append(s)
+    rng = random.Random(42)
+    speaker_ids = list(speaker_groups.keys())
+    rng.shuffle(speaker_ids)
+
+    train_items: List[Dict] = []
+    val_items: List[Dict] = []
+    target_train = int(len(all_samples) * 0.8)
+    for sid in speaker_ids:
+        samples = speaker_groups[sid]
+        if not train_items or len(train_items) + len(samples) <= target_train:
+            train_items.extend(samples)
+        else:
+            val_items.extend(samples)
+
+    train_speakers = {s["speaker_id"] for s in train_items}
+    
+    for sample in all_samples:
+        is_train = sample["speaker_id"] in train_speakers
+        items.append((sample["wav_path"], sample["speaker_id"], None, is_train))
+    
     return items
 
 
@@ -153,21 +181,49 @@ def scan_cremad(
 ) -> List[ScanItem]:
     """Scan CREMA-D for (path, speaker_id, gender, is_train).
 
-    Uses the first ``train_ratio`` fraction of sorted filenames as
-    training data (sorted by filename groups actors together).
+    Uses speaker-stratified split: group by actor, assign whole actors to train/val.
     """
     items = []
     wav_dir = Path(root) / "AudioWAV"
     if not wav_dir.exists():
         return items
-    all_wavs = sorted(wav_dir.glob("*.wav"))
-    n_train = int(len(all_wavs) * train_ratio)
-    for i, wav in enumerate(all_wavs):
+    all_wavs = list(wav_dir.glob("*.wav"))
+
+    # Collect all samples with actor info
+    all_samples = []
+    for wav in all_wavs:
         parts = wav.stem.split("_")
         if len(parts) >= 1:
-            speaker = f"cremad_{parts[0]}"
-            is_train = i < n_train
-            items.append((str(wav), speaker, None, is_train))
+            actor_id = parts[0]
+            speaker = f"cremad_{actor_id}"
+            all_samples.append({
+                "wav_path": str(wav),
+                "speaker_id": speaker,
+            })
+
+    # Speaker-stratified split: group by actor, assign whole actors to train/val
+    speaker_groups: Dict[str, List[Dict]] = {}
+    for s in all_samples:
+        speaker_groups.setdefault(s["speaker_id"], []).append(s)
+    rng = random.Random(42)
+    speaker_ids = list(speaker_groups.keys())
+    rng.shuffle(speaker_ids)
+
+    train_items: List[Dict] = []
+    val_items: List[Dict] = []
+    target_train = int(len(all_samples) * train_ratio)
+    for sid in speaker_ids:
+        samples = speaker_groups[sid]
+        if not train_items or len(train_items) + len(samples) <= target_train:
+            train_items.extend(samples)
+        else:
+            val_items.extend(samples)
+
+    train_speakers = {s["speaker_id"] for s in train_items}
+
+    for sample in all_samples:
+        is_train = sample["speaker_id"] in train_speakers
+        items.append((sample["wav_path"], sample["speaker_id"], None, is_train))
     return items
 
 
@@ -271,6 +327,7 @@ def main():
 
     # Aggregate per speaker using TRAINING DATA ONLY (prevents L1 data leakage)
     speaker_data: Dict[str, Dict[str, Any]] = {}
+    global_agg = WelfordAggregator(dim=3)
     n_train = 0
     n_val = 0
     for (path, spk_id, gender, is_train), result in zip(all_items, prosody_results):
@@ -278,6 +335,7 @@ def main():
             continue
         if is_train:
             n_train += 1
+            global_agg.update(np.array([result["f0_mean"], result["energy_mean"], result["speaking_rate"]]))
             if spk_id not in speaker_data:
                 speaker_data[spk_id] = {
                     "agg": WelfordAggregator(dim=3),
@@ -294,7 +352,7 @@ def main():
 
     logger.info(f"Using {n_train} training utterances for statistics ({n_val} val/test excluded from stats)")
 
-    # Serialize per-speaker stats
+    # Serialize per-speaker stats (training-only)
     output: Dict[str, Dict[str, Any]] = {}
     for spk_id, sd in speaker_data.items():
         output[spk_id] = {
@@ -303,36 +361,52 @@ def main():
             "n": sd["n"],
             "genders": sd["genders"],
         }
+    # Held-out speakers must not receive zero vectors: use a population prior
+    # fitted only on training audio. This preserves split isolation while
+    # retaining meaningful scale for speaker-disjoint evaluation.
+    output["__global__"] = {
+        "mean": global_agg.mean.tolist(),
+        "std": global_agg.std.tolist(),
+        "n": global_agg.n,
+        "genders": {},
+    }
 
-    with open(args.output_file, "w") as f:
+    stats_path = Path(args.output_file)
+    with open(stats_path, "w") as f:
         json.dump(output, f, indent=2)
 
-    logger.info(f"Computed prosody stats for {len(output)} speakers → {args.output_file}")
+    logger.info(f"Computed prosody stats for {len(output)} speakers → {stats_path}")
 
-    # Compute per-utterance z-scores for ALL items using TRAINING-ONLY statistics
-    # This fixes L2: both train and val collate functions receive z-scores
-    # computed from training data only.
-    zscores: Dict[str, torch.Tensor] = {}
-    for (path, spk_id, _gender, _is_train), result in zip(all_items, prosody_results):
+    # Compute per-utterance z-scores SEPARATELY for train and val using TRAINING-ONLY statistics
+    # This fixes L2: train and val collate functions receive DIFFERENT z-score files
+    train_zscores: Dict[str, List[float]] = {}
+    val_zscores: Dict[str, List[float]] = {}
+    
+    for (path, spk_id, _gender, is_train), result in zip(all_items, prosody_results):
         if result is None:
             continue
-        if spk_id not in output:
-            # Speaker not seen in training → use global corpus stats
-            # (or skip: these utterances won't get a z-score)
-            continue
-        spk_mean = np.array(output[spk_id]["mean"], dtype=np.float32)
-        spk_std = np.array(output[spk_id]["std"], dtype=np.float32)
+        stats = output.get(spk_id, output["__global__"])
+        spk_mean = np.array(stats["mean"], dtype=np.float32)
+        spk_std = np.array(stats["std"], dtype=np.float32)
         spk_std = np.clip(spk_std, 1e-6, None)
         feat = np.array([result["f0_mean"], result["energy_mean"], result["speaking_rate"]], dtype=np.float32)
         z = (feat - spk_mean) / spk_std
         utt_id = Path(path).stem
-        zscores[utt_id] = torch.from_numpy(z)
+        z_list = z.tolist()
+        if is_train:
+            train_zscores[utt_id] = z_list
+        else:
+            val_zscores[utt_id] = z_list
 
-    zscores_serial = {k: v.tolist() for k, v in zscores.items()}
-    zscores_path = Path(args.output_file).with_suffix(".zscores.json")
-    with open(zscores_path, "w") as f:
-        json.dump(zscores_serial, f)
-    logger.info(f"Computed per-utterance z-scores for {len(zscores)} utterances → {zscores_path}")
+    train_zscores_path = stats_path.with_suffix(".train.zscores.json")
+    val_zscores_path = stats_path.with_suffix(".val.zscores.json")
+    with open(train_zscores_path, "w") as f:
+        json.dump(train_zscores, f)
+    with open(val_zscores_path, "w") as f:
+        json.dump(val_zscores, f)
+    
+    logger.info(f"Computed per-utterance TRAIN z-scores for {len(train_zscores)} utterances → {train_zscores_path}")
+    logger.info(f"Computed per-utterance VAL z-scores for {len(val_zscores)} utterances → {val_zscores_path}")
     logger.info("Note: z-scores use training-data-only speaker statistics (no data leakage)")
 
 

@@ -53,3 +53,6 @@ data/mustard/audio/
 # Kaggle build artifacts (keep metadata/notebook source)
 .kaggle/dataset/conflictnet-code/
 .kaggle/dataset/*.zip
+*.profraw
+kimi-debug-session*.zip
+data/meld/

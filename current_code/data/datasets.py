@@ -22,11 +22,12 @@ Collation: a custom collate_fn handles variable-length audio.
 from __future__ import annotations
 
 import csv
+import functools
 import json
 import logging
 import os
 import random
-import re as _re
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -256,10 +257,11 @@ class IEMOCAPDataset(Dataset):
                             "text": text,
                             "emotion": emotion,
                             "conflict_binary": int(conflict),
-                            "conflict_type_labels": [0, int(conflict), 0],  # [sarcasm, suppression, deception]
-                            "severity": float(conflict),  # binary proxy; no real severity annotation in IEMOCAP
-                        "speaker_id": utt_id[:6],  # e.g. 'Ses01F' — session+gender uniquely identifies speaker
-                        "gender": "F" if utt_id[5] == "F" else "M",
+                            "conflict_type_labels": [0, int(conflict), 0],  # [sarcasm, suppression, deception] — proxy: suppression only
+                            "severity": float("nan"),  # no real severity annotation in IEMOCAP
+                            "has_real_type_labels": False,  # only suppression proxy available
+                            "speaker_id": utt_id[:6],  # e.g. 'Ses01F' — session+gender uniquely identifies speaker
+                            "gender": "F" if utt_id[5] == "F" else "M",
                             "conversation_id": conv_id,
                             "turn_index": turn_idx,
                         })
@@ -307,6 +309,7 @@ class IEMOCAPDataset(Dataset):
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
             "severity": torch.tensor(item["severity"], dtype=torch.float),
+            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": text,
@@ -391,7 +394,7 @@ class MUStARDDataset(Dataset):
         target_train = int(len(all_samples) * train_ratio)
         for sid in speaker_ids:
             samples = speaker_groups[sid]
-            if len(train_items) + len(samples) <= target_train or not val_items:
+            if not train_items or len(train_items) + len(samples) <= target_train:
                 train_items.extend(samples)
             else:
                 val_items.extend(samples)
@@ -422,8 +425,9 @@ class MUStARDDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "conflict_binary": torch.tensor(sarcasm, dtype=torch.long),
-            "conflict_type_labels": torch.tensor([sarcasm, 0, 0], dtype=torch.float),
-            "severity": torch.tensor(float(sarcasm), dtype=torch.float),  # binary proxy; no real severity in MUStARD++
+            "conflict_type_labels": torch.tensor([sarcasm, 0, 0], dtype=torch.float),  # real sarcasm labels
+            "severity": torch.tensor(float("nan"), dtype=torch.float),  # no real severity in MUStARD++
+            "has_real_type_labels": torch.tensor(True, dtype=torch.bool),  # real sarcasm labels
             "speaker_id": item["speaker_id"],
             "gender": None,
             "text": item["text"],
@@ -505,8 +509,9 @@ class CREMADDataset(Dataset):
                 "text": text,
                 "emotion": CREMAD_EMOTIONS.get(emotion, emotion.lower()),
                 "conflict_binary": int(conflict),
-                "conflict_type_labels": [0, int(conflict), 0],
-                "severity": float(conflict),
+                "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
+                "severity": float("nan"),  # no real severity annotation in CREMA-D
+                "has_real_type_labels": False,  # only suppression proxy available
                 "speaker_id": f"cremad_{actor_id}",
                 "gender": None,
             })
@@ -524,7 +529,7 @@ class CREMADDataset(Dataset):
         target_train = int(len(all_samples) * train_ratio)
         for sid in speaker_ids:
             samples = speaker_groups[sid]
-            if len(train_items) + len(samples) <= target_train or not val_items:
+            if not train_items or len(train_items) + len(samples) <= target_train:
                 train_items.extend(samples)
             else:
                 val_items.extend(samples)
@@ -654,8 +659,9 @@ class MELDDataset(Dataset):
                     "dialogue_id": dia_id,
                     "utterance_id": int(utt_id) if utt_id.isdigit() else 0,
                     "conflict_binary": int(conflict),
-                    "conflict_type_labels": [0, int(conflict), 0],  # suppression
-                    "severity": float(conflict),  # binary proxy; no real severity in MELD
+                    "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
+                    "severity": float("nan"),  # no real severity annotation in MELD
+                    "has_real_type_labels": False,  # only suppression proxy available
                     "speaker_id": f"meld_{speaker}",
                     "gender": None,
                 })
@@ -687,6 +693,7 @@ class MELDDataset(Dataset):
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
             "severity": torch.tensor(item["severity"], dtype=torch.float),
+            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
@@ -791,8 +798,9 @@ class CMUMOSEIDataset(Dataset):
                     "emotion": emotion,
                     "utterance_id": uid,
                     "conflict_binary": int(conflict),
-                    "conflict_type_labels": [0, int(conflict), 0],  # suppression
-                    "severity": float(conflict),  # binary proxy; no real severity in CMU-MOSEI
+                    "conflict_type_labels": [0, int(conflict), 0],  # proxy: suppression only
+                    "severity": float("nan"),  # no real severity annotation in CMU-MOSEI
+                    "has_real_type_labels": False,  # only suppression proxy available
                     "speaker_id": f"mosei_{speaker_prefix}",
                     "gender": None,
                 })
@@ -828,6 +836,7 @@ class CMUMOSEIDataset(Dataset):
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
             "severity": torch.tensor(item["severity"], dtype=torch.float),
+            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
@@ -943,6 +952,7 @@ class CASEDataset(Dataset):
                     "conflict_binary": conflict_binary,
                     "conflict_type_labels": type_labels,
                     "severity": severity,
+                    "has_real_type_labels": True,  # real multi-type labels and severity from metadata
                     "speaker_id": speaker_id,
                     "gender": gender,
                 })
@@ -981,10 +991,11 @@ class CASEDataset(Dataset):
             "conflict_binary": torch.tensor(item["conflict_binary"], dtype=torch.long),
             "conflict_type_labels": torch.tensor(item["conflict_type_labels"], dtype=torch.float),
             "severity": torch.tensor(item["severity"], dtype=torch.float),
+            "has_real_type_labels": torch.tensor(item.get("has_real_type_labels", False), dtype=torch.bool),
             "speaker_id": item["speaker_id"],
             "gender": item["gender"],
             "text": item["text"],
-            "utterance_id": Path(item["wav_path"]).stem if item["wav_path"] is not None else f"case_{idx}",
+            "utterance_id": Path(item["wav_path"]).stem,
             "word_timestamps": word_timestamps,
             "token_word_boundaries": token_word_boundaries,
         }
@@ -1083,13 +1094,11 @@ def _collate_core(
             b["audio_np"] = aug_np
             b["audio"] = torch.tensor(aug_np, dtype=torch.float32)
 
-    max_len = max(b["audio"].shape[0] for b in batch)
-    audio_padded = torch.zeros(len(batch), max_len)
-    audio_attention_mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
-    for i, b in enumerate(batch):
-        t = b["audio"].shape[0]
-        audio_padded[i, :t] = b["audio"]
-        audio_attention_mask[i, :t] = True
+    audios = [b["audio"] for b in batch]
+    lengths = torch.tensor([a.shape[0] for a in audios])
+    audio_padded = torch.nn.utils.rnn.pad_sequence(audios, batch_first=True)
+    arange = torch.arange(audio_padded.size(1)).unsqueeze(0)
+    audio_attention_mask = arange < lengths.unsqueeze(1)
 
     # Look up or default prosody z-scores
     # Keys match utterance_id from each dataset's __getitem__ (audio file stem).
@@ -1133,6 +1142,7 @@ def _collate_core(
         "conflict_binary": torch.stack([b["conflict_binary"] for b in batch]).float(),
         "conflict_type_labels": torch.stack([b["conflict_type_labels"] for b in batch]),
         "severity": torch.stack([b["severity"] for b in batch]).unsqueeze(-1),
+        "has_real_type_labels": torch.stack([b["has_real_type_labels"] for b in batch]),
         "speaker_ids": speaker_ids,
         "genders": genders,
         "conversation_ids": conversation_ids,
@@ -1148,15 +1158,16 @@ def make_collate_fn(
 ):
     """Factory: returns a collate_fn with augmentation baked in via closure.
 
+    Uses ``functools.partial`` over a top-level function so the result
+    is picklable (required by DataLoader with ``num_workers > 0``).
+
     Usage::
 
         from data.augmentation import AudioAugmentor
         train_collate = make_collate_fn(augmentor=AudioAugmentor())
         val_collate   = make_collate_fn()  # no augmentation
     """
-    def _collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return _collate_core(batch, augmentor=augmentor, prosody_lookup=prosody_lookup)
-    return _collate
+    return functools.partial(_collate_core, augmentor=augmentor, prosody_lookup=prosody_lookup)
 
 
 # Backwards-compatible default (no augmentation)

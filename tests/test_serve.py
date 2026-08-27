@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import base64
 import tempfile
 
 import pytest
@@ -12,7 +13,7 @@ class TestServeConfig:
     def test_defaults(self):
         from serve.config import ServeConfig
         cfg = ServeConfig()
-        assert cfg.device == "cuda"
+        assert cfg.device == "auto"
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8000
         assert cfg.embed_dim == 256
@@ -95,8 +96,8 @@ class TestServeSchemas:
     def test_batch_request_validation(self):
         from serve.schemas import PredictBatchRequest, BatchItem
         r = PredictBatchRequest(items=[
-            BatchItem(audio=b"wav", text="hello"),
-            BatchItem(audio=b"wav2", text="world", prosody_z=[1.0, 0.5, -0.3]),
+            BatchItem(audio=base64.b64encode(b"wav").decode(), text="hello"),
+            BatchItem(audio=base64.b64encode(b"wav2").decode(), text="world", prosody_z=[1.0, 0.5, -0.3]),
         ])
         assert len(r.items) == 2
         assert r.items[0].text == "hello"
@@ -110,7 +111,7 @@ class TestServeSchemas:
     def test_batch_request_max_length(self):
         from serve.schemas import PredictBatchRequest, BatchItem
         with pytest.raises(Exception):
-            PredictBatchRequest(items=[BatchItem(audio=b"x", text="x")] * 65)
+            PredictBatchRequest(items=[BatchItem(audio="eA==", text="x")] * 65)
 
     def test_severity_bounds(self):
         from serve.schemas import PredictResponse

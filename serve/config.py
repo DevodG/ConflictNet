@@ -7,7 +7,7 @@ from typing import List
 @dataclass
 class ServeConfig:
     checkpoint_path: str = "checkpoints/best_model.safetensors"
-    device: str = "cuda"
+    device: str = "auto"
     host: str = "0.0.0.0"
     port: int = 8000
     max_audio_len: float = 10.0
@@ -26,7 +26,9 @@ class ServeConfig:
     temporal_max_turns: int = 16
 
     # CORS
-    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    # Cross-origin access is opt-in. Wildcard origins combined with
+    # credentials are unsafe and rejected by browsers.
+    cors_origins: List[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "ServeConfig":
@@ -42,8 +44,8 @@ class ServeConfig:
                     kwargs[f] = int(env_val)
                 elif field_type is float:
                     kwargs[f] = float(env_val)
-                elif field_type is list and "str" in str(field_type):
-                    kwargs[f] = [x.strip() for x in env_val.split(",")]
+                elif f == "cors_origins":
+                    kwargs[f] = [x.strip() for x in env_val.split(",") if x.strip()]
                 else:
                     kwargs[f] = env_val
             env_val_list = os.environ.get(f"SERVE_{f.upper()}_LIST")

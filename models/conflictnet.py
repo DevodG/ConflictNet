@@ -65,6 +65,36 @@ class ConflictNetOutput:
 
 
 # ---------------------------------------------------------------------------
+# Focal loss for multi-label classification (handles class imbalance)
+# ---------------------------------------------------------------------------
+
+def focal_loss_with_logits(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    gamma: float = 2.0,
+    alpha: float = 0.25,
+) -> torch.Tensor:
+    """Focal loss for multi-label BCE.
+
+    ``gamma`` controls the down-weighting of easy examples:
+      gamma=0 → standard BCE; gamma=2 → focal loss (recommended).
+
+    ``alpha`` balances positive/negative class weight.
+    The default 0.25 works well for binary problems with ≤25% positives.
+
+    Ref: Lin et al. "Focal Loss for Dense Object Detection" (2017).
+    """
+    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    pt = torch.exp(-bce)
+    # Alpha is class-conditional: positives receive ``alpha`` and negatives
+    # receive ``1 - alpha``. Applying alpha uniformly changes the scale but
+    # does not address class imbalance.
+    alpha_t = alpha * targets + (1.0 - alpha) * (1.0 - targets)
+    focal = alpha_t * (1 - pt) ** gamma * bce
+    return focal.mean()
+
+
+# ---------------------------------------------------------------------------
 # Self-supervised swap pre-training objective
 # ---------------------------------------------------------------------------
 
@@ -95,7 +125,9 @@ class SwapPretrainingObjective(nn.Module):
         """Return BCE loss for swap detection (audio-swap or text-swap)."""
         B = audio_embeds.size(0)
         device = audio_embeds.device
-        swap_mask = torch.rand(B, device=device) < self.swap_prob
+        # A singleton batch cannot produce a mismatched pair. Treat it as a
+        # matched example rather than creating a contradictory positive label.
+        swap_mask = torch.rand(B, device=device) < self.swap_prob if B > 1 else torch.zeros(B, dtype=torch.bool, device=device)
         swap_labels = swap_mask.float()
 
         if not swap_mask.any():
@@ -103,21 +135,27 @@ class SwapPretrainingObjective(nn.Module):
             logits = self.swap_classifier(pair_feat).squeeze(-1)
             return F.binary_cross_entropy_with_logits(logits, swap_labels)
 
-        perm = torch.randperm(B, device=device)
+        # A random permutation may contain fixed points, which would label an
+        # unchanged pair as swapped. A non-zero cyclic shift is a derangement.
+        shift = torch.randint(1, B, (), device=device)
+        perm = (torch.arange(B, device=device) + shift) % B
 
-        # Randomly choose audio-swap (left) or text-swap (right) for each item
         use_audio_swap = torch.rand(B, device=device) < 0.5
-        pair_feats = []
+        swap_exp = swap_mask.unsqueeze(-1)
+        audio_swap_exp = use_audio_swap.unsqueeze(-1)
 
-        for i in range(B):
-            if not swap_mask[i]:
-                pair_feats.append(torch.cat([audio_embeds[i], text_embeds[i]], dim=0))
-            elif use_audio_swap[i]:
-                pair_feats.append(torch.cat([audio_embeds[perm[i]], text_embeds[i]], dim=0))
-            else:
-                pair_feats.append(torch.cat([audio_embeds[i], text_embeds[perm[i]]], dim=0))
+        pair_normal = torch.cat([audio_embeds, text_embeds], dim=-1)
+        pair_audio_swap = torch.cat([audio_embeds[perm], text_embeds], dim=-1)
+        pair_text_swap = torch.cat([audio_embeds, text_embeds[perm]], dim=-1)
 
-        pair_feat = torch.stack(pair_feats)
+        pair_feat = torch.where(
+            swap_exp & audio_swap_exp, pair_audio_swap,
+            torch.where(
+                swap_exp & ~audio_swap_exp, pair_text_swap,
+                pair_normal,
+            ),
+        )
+
         logits = self.swap_classifier(pair_feat).squeeze(-1)
         return F.binary_cross_entropy_with_logits(logits, swap_labels)
 
@@ -137,10 +175,14 @@ class MultiTaskLoss(nn.Module):
         super().__init__()
         self.log_vars = nn.Parameter(torch.zeros(n_tasks))
 
-    def forward(self, losses: List[torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def forward(self, losses: List[Optional[torch.Tensor]]) -> Tuple[torch.Tensor, Dict[str, float]]:
         total = torch.tensor(0.0, device=self.log_vars.device)
         weights = {}
         for i, loss in enumerate(losses):
+            # Missing supervision must not optimise log(sigma) by itself;
+            # doing so drives it to -infinity on proxy-only batches.
+            if loss is None:
+                continue
             precision = torch.exp(-self.log_vars[i])
             total = total + precision * loss + self.log_vars[i]
             weights[f"sigma_task_{i}"] = torch.exp(self.log_vars[i] * 0.5).item()
@@ -185,6 +227,9 @@ class ConflictNet(nn.Module):
         use_baseline_subtract: bool = True,
         lora_r: int = 16,
         lora_alpha: int = 32,
+        focal_loss_gamma: float = 0.0,
+        label_smoothing: float = 0.0,
+        separation_lambda: float = 0.1,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -195,6 +240,9 @@ class ConflictNet(nn.Module):
         self.use_cross_attn_injection = use_cross_attn_injection
         self.use_speaker_adaptive_threshold = use_speaker_adaptive_threshold
         self.use_baseline_subtract = use_baseline_subtract
+        self.focal_loss_gamma = focal_loss_gamma
+        self.label_smoothing = label_smoothing
+        self.separation_lambda = separation_lambda
 
         # 1. Encoders
         self.audio_encoder = build_audio_encoder(audio_encoder_name)
@@ -257,6 +305,7 @@ class ConflictNet(nn.Module):
             n_types=n_conflict_types,
             word_div_dim=word_div_dim,
             speaker_adaptive_threshold=use_speaker_adaptive_threshold,
+            separation_lambda=separation_lambda,
         )
 
         # 7. Contrastive loss
@@ -266,8 +315,14 @@ class ConflictNet(nn.Module):
         self.swap_objective = SwapPretrainingObjective(embed_dim=embed_dim) if use_swap_pretraining else None
 
         # 9. Multi-task loss balancing
-        # Tasks: [contrastive, conflict_type, severity, swap]
-        n_tasks = 4 if use_swap_pretraining else 3
+        # Tasks: [contrastive, conflict_type, severity, separation, swap]
+        # n_tasks depends on which losses are actually enabled
+        self._has_separation = hasattr(self.classifier, 'separation_loss') and separation_lambda > 0.0
+        n_tasks = 3  # contrastive, type, severity
+        if self._has_separation:
+            n_tasks += 1
+        if use_swap_pretraining:
+            n_tasks += 1
         self.multi_task_loss = MultiTaskLoss(n_tasks=n_tasks)
 
         logger.info(
@@ -379,6 +434,7 @@ class ConflictNet(nn.Module):
         conflict_type_labels: Optional[torch.Tensor] = None,  # (B, n_types) multi-hot
         severity_labels: Optional[torch.Tensor] = None,       # (B, 1)
         conflict_binary_labels: Optional[torch.Tensor] = None, # (B,) for contrastive
+        has_real_type_labels: Optional[torch.Tensor] = None,  # (B,) bool - mask for real type labels
         pretraining: bool = False,
     ) -> ConflictNetOutput:
 
@@ -456,7 +512,7 @@ class ConflictNet(nn.Module):
         loss = None
         loss_breakdown = None
         if conflict_type_labels is not None or pretraining:
-            losses = []
+            losses: List[Optional[torch.Tensor]] = []
 
             # 6a. Contrastive loss
             cl = self.contrastive_loss_fn(
@@ -466,38 +522,83 @@ class ConflictNet(nn.Module):
             )
             losses.append(cl)
 
-            # 6b. Multi-label BCE loss for conflict types
+            # 6b. Multi-label classification loss (focal or BCE with optional smoothing)
+            # Only compute on samples with real type labels (has_real_type_labels=True)
             if conflict_type_labels is not None:
-                type_loss = nn.functional.binary_cross_entropy_with_logits(
-                    logits_type, conflict_type_labels.float()
-                )
-                losses.append(type_loss)
+                has_real_labels = has_real_type_labels
+                if has_real_labels is not None:
+                    # Mask out samples with proxy labels
+                    real_mask = has_real_labels.bool()  # (B,)
+                    if real_mask.any():
+                        targets = conflict_type_labels[real_mask].float()
+                        logits_real = logits_type[real_mask]
+                        if self.label_smoothing > 0.0:
+                            targets = targets * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+                        if self.focal_loss_gamma > 0.0:
+                            type_loss = focal_loss_with_logits(
+                                logits_real, targets, gamma=self.focal_loss_gamma,
+                            )
+                        else:
+                            type_loss = nn.functional.binary_cross_entropy_with_logits(
+                                logits_real, targets,
+                            )
+                        losses.append(type_loss)
+                    else:
+                        losses.append(None)
+                else:
+                    # Fallback: compute on all (backward compatibility)
+                    targets = conflict_type_labels.float()
+                    if self.label_smoothing > 0.0:
+                        targets = targets * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+                    if self.focal_loss_gamma > 0.0:
+                        type_loss = focal_loss_with_logits(
+                            logits_type, targets, gamma=self.focal_loss_gamma,
+                        )
+                    else:
+                        type_loss = nn.functional.binary_cross_entropy_with_logits(
+                            logits_type, targets,
+                        )
+                    losses.append(type_loss)
             else:
-                losses.append(torch.tensor(0.0, device=audio.device))
+                losses.append(None)
 
-            # 6c. Severity MSE loss
+            # 6c. Severity MSE loss (skip NaN labels)
             if severity is not None and severity_labels is not None:
                 sev_target = severity_labels.float().view(-1)
                 sev_pred = severity.view(-1)
-                sev_loss = nn.functional.mse_loss(sev_pred, sev_target)
-                losses.append(sev_loss)
+                # Mask out NaN severity labels
+                valid_mask = ~torch.isnan(sev_target)
+                if valid_mask.any():
+                    sev_loss = nn.functional.mse_loss(sev_pred[valid_mask], sev_target[valid_mask])
+                    losses.append(sev_loss)
+                else:
+                    losses.append(None)
             else:
-                losses.append(torch.tensor(0.0, device=audio.device))
+                losses.append(None)
 
-            # 6d. Self-supervised swap loss (pre-training only)
-            if self.swap_objective is not None:
+            # 6d. Separation wall loss (Gap 9) - orthogonality between type heads
+            if hasattr(self.classifier, 'separation_loss'):
+                sep_loss = self.classifier.separation_loss()
+                losses.append(sep_loss)
+
+            # 6e. Self-supervised swap loss (pre-training only)
+            if self.swap_objective is not None and pretraining:
                 swap_loss = self.swap_objective(audio_embed, text_embed)
                 losses.append(swap_loss)
 
             loss, sigma_weights = self.multi_task_loss(losses)
             loss_breakdown = {
-                "contrastive": losses[0].detach().item(),
-                "type_bce": losses[1].detach().item(),
-                "severity_mse": losses[2].detach().item(),
+                "contrastive": losses[0].detach().item() if losses[0] is not None else 0.0,
+                "type_loss": losses[1].detach().item() if losses[1] is not None else 0.0,
+                "severity_mse": losses[2].detach().item() if losses[2] is not None else 0.0,
                 **sigma_weights,
             }
-            if self.swap_objective is not None:
-                loss_breakdown["swap"] = losses[3].detach().item()
+            idx = 3
+            if self._has_separation:
+                loss_breakdown["separation"] = losses[idx].detach().item() if losses[idx] is not None else 0.0
+                idx += 1
+            if self.swap_objective is not None and pretraining:
+                loss_breakdown["swap"] = losses[idx].detach().item() if losses[idx] is not None else 0.0
 
         return ConflictNetOutput(
             logits_type=logits_type,

@@ -37,6 +37,7 @@ classifier:
   n_classes: 3  # sarcasm, suppression, deception
   severity_head: true
   hidden_dims: [512, 256]
+  separation_lambda: 0.1  # Gap 9: separation wall between type heads
 
 # Training
 training:
@@ -54,6 +55,8 @@ training:
   gradient_accumulation_steps: 1
   early_stop_patience: 10
   loss_balancing: uncertainty  # kendall2018
+  focal_loss_gamma: 2.0  # handle class imbalance
+  label_smoothing: 0.1
 
 # Data
 data:

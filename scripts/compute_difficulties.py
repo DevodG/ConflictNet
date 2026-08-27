@@ -36,12 +36,16 @@ def parse_args():
     p.add_argument("--meld_root", type=str, default=None)
     p.add_argument("--output_file", type=str, default="difficulties.json")
     p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--device", type=str, default=None)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+
+    from models.device_utils import resolve_device, supports_pin_memory, supports_non_blocking
+    if args.device is None:
+        args.device = resolve_device()
 
     # Build datasets
     from data.datasets import IEMOCAPDataset, MUStARDDataset, CREMADDataset, MELDDataset, conflictnet_collate_fn
@@ -67,7 +71,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=2,
-        pin_memory=True,
+        pin_memory=supports_pin_memory(args.device),
         collate_fn=conflictnet_collate_fn,
     )
 
@@ -98,7 +102,7 @@ def main():
     with torch.no_grad():
         for batch in loader:
             batch_gpu = {
-                k: v.to(args.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(args.device, non_blocking=supports_non_blocking(args.device)) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(

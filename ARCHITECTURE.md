@@ -688,6 +688,40 @@ ConflictClassifierOutput = Tuple[
 ]
 ```
 
+### 10.4 Separation Wall Between Conflict Types ⭐ (Gap 9)
+
+```python
+def separation_loss(self) -> torch.Tensor:
+    """Compute separation wall loss between conflict type heads.
+
+    Two components:
+    1. Orthogonality: cosine similarity between weight vectors → 0
+    2. Bias separation: encourage different bias terms for different types
+
+    Returns:
+        Scalar loss encouraging distinct type representations.
+    """
+    W = self.type_head.weight  # (n_types, in_dim)
+    n_types = self.n_types
+
+    # 1. Orthogonality loss: normalize weights and penalize non-zero cosine similarity
+    W_norm = F.normalize(W, dim=-1)  # (n_types, in_dim)
+    cos_sim = W_norm @ W_norm.T  # (n_types, n_types)
+    # Penalize off-diagonal elements (similarity between different types)
+    ortho_loss = (cos_sim - torch.eye(n_types, device=W.device)).triu(diagonal=1).pow(2).sum()
+
+    # 2. Bias separation: encourage different bias terms for different types
+    bias = self.type_head.bias  # (n_types,)
+    bias_loss = F.mse_loss(bias, torch.zeros_like(bias))  # encourage zero-centered
+
+    return self.separation_lambda * (ortho_loss + bias_loss)
+```
+
+**What it does:**
+- **Orthogonality**: Forces type head weight vectors to be orthogonal, so each type learns independent features
+- **Bias separation**: Encourages different decision boundaries for each conflict type
+- **Result**: Sarcasm, suppression, and deception each have their own "separation wall" in the feature space
+
 ---
 
 ## 11. Loss Functions
@@ -765,8 +799,29 @@ class MultiTaskLoss(nn.Module):
 ```
 
 Number of tasks:
-- **Pre-training**: 4 — [contrastive, type_BCE, severity_MSE, swap]
-- **Fine-tuning**: 3 (or 4 if swap continues) — [contrastive, type_BCE, severity_MSE]
+- **Pre-training**: 5 — [contrastive, type_BCE, severity_MSE, separation, swap]
+- **Fine-tuning**: 4 (or 5 if swap continues) — [contrastive, type_BCE, severity_MSE, separation]
+
+### 11.6 Robust Loss Handling for Incomplete Labels
+
+**Severity labels**: Many datasets (IEMOCAP, CREMA-D, MELD, CMU-MOSEI, MUStARD++) lack real severity annotations. These are stored as `NaN` and excluded from MSE loss computation:
+
+```python
+valid_mask = ~torch.isnan(sev_target)
+if valid_mask.any():
+    sev_loss = MSE(sev_pred[valid_mask], sev_target[valid_mask])
+```
+
+**Conflict type labels**: Only MUStARD++ (sarcasm) and CASE 2026 (multi-type) have real multi-type labels. Other datasets use proxy labels (all mapped to suppression `[0, 1, 0]`). A `has_real_type_labels` boolean mask controls whether type loss is computed:
+
+```python
+if has_real_labels is not None:
+    real_mask = has_real_labels.bool()
+    if real_mask.any():
+        type_loss = BCE(logits_type[real_mask], targets[real_mask])
+```
+
+This prevents the model from learning dataset-specific proxy biases.
 
 ---
 

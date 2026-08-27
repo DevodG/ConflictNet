@@ -28,7 +28,7 @@ def parse_args():
     p.add_argument("--output_dir", type=str, default="ablation_results")
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--device", type=str, default=None)
     return p.parse_args()
 
 
@@ -71,6 +71,9 @@ def print_table(results: list) -> None:
 
 def main():
     args = parse_args()
+    from models.device_utils import resolve_device
+    if args.device is None:
+        args.device = resolve_device()
     config_dir = Path(args.config_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -38,8 +38,12 @@ def parse_args():
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
     p.add_argument("--case_root", type=str, default=None, help="CASE 2026 benchmark root")
+    p.add_argument("--num_workers", type=int, default=2,
+                   help="DataLoader worker processes")
+    p.add_argument("--prefetch_factor", type=int, default=2,
+                   help="Samples prefetched per worker")
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--device", type=str, default=None)
     p.add_argument("--fairness", action="store_true", help="Run fairness audit")
     p.add_argument("--attribution", action="store_true", help="Compute IG attribution")
     p.add_argument("--llm_baseline", action="store_true", help="Run GPT-4o text baseline")
@@ -57,18 +61,14 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    from models.device_utils import resolve_device, supports_pin_memory, supports_non_blocking
+    if args.device is None:
+        args.device = resolve_device()
+
     # --- Load model ---
-    from models.conflictnet import ConflictNet
-
     checkpoint_path = args.checkpoint
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
-
-    ckpt = load_checkpoint_state(checkpoint_path, device=args.device)
-    model_state = extract_model_state(ckpt)
-    model = ConflictNet()
-    model.load_state_dict(model_state, strict=False)
-    model.to(args.device)
-    model.eval()
+    from models.checkpoint_utils import load_conflictnet_model
+    model, _ = load_conflictnet_model(checkpoint_path, device=args.device)
     logger.info(f"[Eval] Loaded checkpoint from {args.checkpoint}")
 
     # Load pre-computed prosody z-scores if available
@@ -103,19 +103,21 @@ def main():
         raise ValueError("Provide at least one of --iemocap_root, --mustard_root, or --case_root")
 
     eval_set = ConcatDataset(eval_datasets)
-    pin = (args.device != "cpu")  # pin_memory only valid for CUDA
+    pin = supports_pin_memory(args.device)
     eval_collate = make_collate_fn(prosody_lookup=prosody_lookup)
-    eval_loader = DataLoader(
-        eval_set,
+    loader_kwargs = dict(
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
-        pin_memory=pin,          # let PyTorch handle pinning automatically
+        num_workers=args.num_workers,
+        pin_memory=pin,
         collate_fn=eval_collate,
     )
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+    eval_loader = DataLoader(eval_set, **loader_kwargs)
 
     # --- Run inference ---
-    all_probs, all_labels, all_genders = [], [], []
+    all_probs, all_labels, all_real_type_masks, all_genders = [], [], [], []
     all_severity_pred, all_severity_true = [], []
     sample_audio = []
 
@@ -123,7 +125,7 @@ def main():
         for batch in eval_loader:
             # non_blocking=True pairs with pin_memory=True for async H→D transfers
             batch_gpu = {
-                k: v.to(args.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(args.device, non_blocking=supports_non_blocking(args.device)) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(
@@ -135,6 +137,7 @@ def main():
             )
             all_probs.append(out.probs_type.cpu().numpy())
             all_labels.append(batch["conflict_type_labels"].numpy())
+            all_real_type_masks.append(batch["has_real_type_labels"].numpy())
             if out.severity is not None:
                 all_severity_pred.append(out.severity.squeeze(-1).cpu().numpy())
                 all_severity_true.append(batch["severity"].squeeze(-1).numpy())
@@ -145,13 +148,21 @@ def main():
 
     all_probs = np.concatenate(all_probs, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
+    real_type_mask = np.concatenate(all_real_type_masks, axis=0).astype(bool)
 
     # --- Metrics ---
     from evaluation.metrics import compute_all_metrics, print_metrics
 
     sev_pred = np.concatenate(all_severity_pred) if all_severity_pred else None
     sev_true = np.concatenate(all_severity_true) if all_severity_true else None
-    metrics = compute_all_metrics(all_probs, all_labels, sev_pred, sev_true)
+    if not real_type_mask.any():
+        raise ValueError("No samples have real conflict subtype labels; refusing to report subtype metrics on proxies")
+    metrics = compute_all_metrics(
+        all_probs[real_type_mask], all_labels[real_type_mask],
+        sev_pred[real_type_mask] if sev_pred is not None else None,
+        sev_true[real_type_mask] if sev_true is not None else None,
+    )
+    metrics["n_real_type_labels"] = int(real_type_mask.sum())
     print_metrics(metrics)
 
     with open(out_dir / "metrics.json", "w") as f:

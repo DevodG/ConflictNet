@@ -141,7 +141,8 @@ def main():
     if seen_set:
         logger.info(f"[OOD-Probe] Seen samples: {len(seen_set)} from {len(seen)} speakers")
 
-    pin = (device.type != "cpu")
+    from models.device_utils import supports_pin_memory
+    pin = supports_pin_memory(device.type)
     held_out_loader = DataLoader(
         held_out_set, batch_size=args.batch_size, shuffle=False,
         num_workers=2, pin_memory=pin, collate_fn=conflictnet_collate_fn,
@@ -154,50 +155,18 @@ def main():
 
     with torch.no_grad():
         for batch in held_out_loader:
+            from models.device_utils import supports_non_blocking
+            non_block = supports_non_blocking(device.type)
             batch_gpu = {
-                k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(
                 audio=batch_gpu["audio"],
                 input_ids=batch_gpu["input_ids"],
                 attention_mask=batch_gpu["attention_mask"],
-                audio_attention_mask=batch_gpu.get("audio_attention_mask"),
-                prosody_z=batch_gpu.get("prosody_z"),
 
-            )
-            probs_np = out.probs_type.cpu().numpy()
-            labels_np = batch["conflict_type_labels"].numpy()
-            all_probs.append(probs_np)
-            all_labels.append(labels_np)
-
-            for i, spk in enumerate(batch["speaker_ids"]):
-                speaker_probs[spk].append(probs_np[i])
-                speaker_labels[spk].append(labels_np[i])
-
-    all_probs = np.concatenate(all_probs, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
-
-    # --- Metrics ---
-    from evaluation.metrics import compute_all_metrics, print_metrics
-
-    overall = compute_all_metrics(all_probs, all_labels)
-    print_metrics(overall, prefix="[OOD-Probe] Overall")
-
-    # Per-speaker breakdown
-    per_speaker = {}
-    for spk in sorted(speaker_probs.keys()):
-        probs = np.stack(speaker_probs[spk], axis=0)
-        labels = np.stack(speaker_labels[spk], axis=0)
-        spk_metrics = compute_all_metrics(probs, labels)
-        per_speaker[spk] = {
-            k: float(v) if isinstance(v, (np.floating, float)) else v
-            for k, v in spk_metrics.items()
-        }
-        logger.info(f"[OOD-Probe] Speaker {spk} ({len(probs)} samples): "
-                    f"macro_f1={spk_metrics['macro_f1']:.4f}")
-
-    # --- Compare with seen speakers (if provided) ---
+            # --- Compare with seen speakers (if provided) ---
     seen_metrics = None
     if seen_set:
         seen_loader = DataLoader(
@@ -207,7 +176,7 @@ def main():
         seen_probs, seen_labels = [], []
         with torch.no_grad():
             for batch in seen_loader:
-                batch_gpu = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                batch_gpu = {k: v.to(device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                              for k, v in batch.items()}
                 out = model(
                     audio=batch_gpu["audio"],

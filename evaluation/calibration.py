@@ -346,8 +346,10 @@ def _inference(
     all_probs, all_labels = [], []
     with torch.no_grad():
         for batch in loader:
+            from models.device_utils import supports_non_blocking
+            non_block = supports_non_blocking(device if isinstance(device, str) else device.type)
             batch_gpu = {
-                k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(
@@ -370,18 +372,9 @@ def main():
     device = torch.device(args.device)  # type: ignore
 
     # --- Load model ---
-    from models.conflictnet import ConflictNet
-
     checkpoint_path = args.checkpoint
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
-
-    ckpt = load_checkpoint_state(checkpoint_path, device=device)
-    model_state = extract_model_state(ckpt)
-
-    model = ConflictNet()
-    model.load_state_dict(model_state, strict=False)
-    model.to(device)
-    model.eval()
+    from models.checkpoint_utils import load_conflictnet_model
+    model, _ = load_conflictnet_model(checkpoint_path, device=device)
     logger.info(f"[Calib] Loaded checkpoint from {args.checkpoint}")
 
     # --- Inference per source ---
@@ -414,7 +407,7 @@ def main():
                 continue
             loader = DataLoader(
                 ds, batch_size=args.batch_size, shuffle=False,
-                num_workers=2, pin_memory=True, collate_fn=conflictnet_collate_fn,
+                num_workers=2, pin_memory=False, collate_fn=conflictnet_collate_fn,
             )
             probs, labels = _inference(model, loader, device)
             source_probs[name] = probs

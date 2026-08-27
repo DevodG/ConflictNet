@@ -81,10 +81,16 @@ class ConflictNetTrainer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.use_amp = cfg.get("amp", False) and "cuda" in device
-        self.grad_scaler: Optional[torch.cuda.amp.GradScaler] = None
-        if self.use_amp:
-            self.grad_scaler = torch.cuda.amp.GradScaler()
+        from models.device_utils import device_supports_amp, device_supports_bf16
+
+        self.use_amp = cfg.get("amp", False) and device_supports_amp(device)
+        self.use_bf16 = cfg.get("bf16", False) and device_supports_bf16(device)
+        self.amp_dtype = torch.bfloat16 if self.use_bf16 else torch.float16
+        
+        self.grad_scaler: Optional[torch.amp.GradScaler] = None
+        # BF16 doesn't need GradScaler in PyTorch 2.0+ (gradients don't underflow)
+        if self.use_amp and not self.use_bf16:
+            self.grad_scaler = torch.amp.GradScaler(device)
 
         self._setup_optimizer()
         self._setup_wandb()
@@ -132,6 +138,10 @@ class ConflictNetTrainer:
 
     def train_epoch(self, epoch: int, pretraining: bool = False) -> Dict[str, float]:
         self.model.train()
+        # Context is an ordered, within-epoch feature. Retaining it across
+        # epochs would make the last turn of an old epoch visible to the first
+        # turn of the next one.
+        self.ctx_cache.clear()
         total_loss = 0.0
         n_batches = 0
 
@@ -145,27 +155,27 @@ class ConflictNetTrainer:
 
         self.optimizer.zero_grad()
 
+        from models.device_utils import supports_non_blocking
+        non_block = supports_non_blocking(self.device)
+
         for batch in self.train_loader:
-            # non_blocking=True pairs with pin_memory=True on the DataLoader
             batch = {
-                k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(self.device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
 
             # Populate context from cache (history of past turns for each conversation)
             conv_ids = batch.get("conversation_ids", [])
+            ctx_embeds = None
+            ctx_padding = None
+            str_conv_ids: list[str] = []
             if conv_ids and isinstance(conv_ids, list):
-                str_conv_ids: list[str] = [str(x) for x in conv_ids]
-                model_embed_dim = getattr(self.model, "embed_dim", 256)
-                embed_dim_val = model_embed_dim if isinstance(model_embed_dim, int) else 256
+                str_conv_ids = [str(x) for x in conv_ids]
                 ctx_embeds, ctx_padding, _ = self.ctx_cache.get_batch_context(
-                    str_conv_ids, embed_dim=embed_dim_val
+                    str_conv_ids, embed_dim=getattr(self.model, "embed_dim", 256)
                 )
-            else:
-                ctx_embeds = None
-                ctx_padding = None
 
-            with torch.autocast(device_type=self.device, enabled=self.use_amp):
+            with torch.autocast(device_type=self.device, enabled=self.use_amp, dtype=self.amp_dtype):
                 output = self.model(
                     audio=batch["audio"],
                     input_ids=batch["input_ids"],
@@ -180,12 +190,11 @@ class ConflictNetTrainer:
                     conflict_type_labels=batch.get("conflict_type_labels"),
                     severity_labels=batch.get("severity"),
                     conflict_binary_labels=batch.get("conflict_binary"),
+                    has_real_type_labels=batch.get("has_real_type_labels"),
                     pretraining=pretraining,
                 )
-
             # Update context cache with current turn fused embeddings
-            if conv_ids and isinstance(conv_ids, list) and output.fused_embed is not None:
-                str_conv_ids: list[str] = [str(x) for x in conv_ids]
+            if str_conv_ids and output.fused_embed is not None:
                 self.ctx_cache.batch_update(str_conv_ids, output.fused_embed)
 
             loss = output.loss
@@ -251,15 +260,17 @@ class ConflictNetTrainer:
         all_preds, all_labels = [], []
 
         for batch in self.val_loader:
+            from models.device_utils import supports_non_blocking
+            non_block = supports_non_blocking(self.device)
             batch = {
-                k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(self.device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             conv_ids = batch.get("conversation_ids", [])
             ctx_embeds, ctx_padding, _ = self.ctx_cache.get_batch_context(
                 conv_ids, embed_dim=getattr(self.model, "embed_dim", 256)
             ) if conv_ids else (None, None, [])
-            with torch.autocast(device_type=self.device, enabled=self.use_amp):
+            with torch.autocast(device_type=self.device, enabled=self.use_amp, dtype=self.amp_dtype):
                 output = self.model(
                 audio=batch["audio"],
                 input_ids=batch["input_ids"],
@@ -272,6 +283,10 @@ class ConflictNetTrainer:
                 word_timestamps=batch.get("word_timestamps"),
                 token_word_boundaries=batch.get("token_word_boundaries"),
             )
+            # Build validation history causally after predicting the current
+            # turn, so it is available only to later turns.
+            if conv_ids and output.fused_embed is not None:
+                self.ctx_cache.batch_update([str(cid) for cid in conv_ids], output.fused_embed)
             if output.conflict_flag is not None:
                 preds = output.conflict_flag.cpu().numpy().astype(int)
             else:

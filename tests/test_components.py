@@ -104,6 +104,24 @@ class TestEncoders:
         assert normed.shape == out.shape
 
 
+class TestTrainingObjectives:
+    def test_swap_objective_handles_singleton_batch(self):
+        """A batch of one cannot contain a genuinely swapped pair."""
+        from models.conflictnet import SwapPretrainingObjective
+        objective = SwapPretrainingObjective(embed_dim=8, swap_prob=1.0)
+        loss = objective(torch.randn(1, 8), torch.randn(1, 8))
+        assert torch.isfinite(loss)
+
+    def test_focal_loss_balances_positive_and_negative_examples(self):
+        from models.conflictnet import focal_loss_with_logits
+        logits = torch.zeros(2, 1)
+        targets = torch.tensor([[1.0], [0.0]])
+        loss = focal_loss_with_logits(logits, targets, gamma=0.0, alpha=0.25)
+        # At zero logits BCE is identical for both rows; the expected mean
+        # therefore uses alpha for positive and 1-alpha for negative.
+        assert torch.allclose(loss, torch.tensor(0.5 * torch.log(torch.tensor(2.0))))
+
+
 # ---------------------------------------------------------------------------
 # Temporal context tests
 # ---------------------------------------------------------------------------

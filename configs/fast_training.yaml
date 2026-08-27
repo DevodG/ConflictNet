@@ -1,0 +1,90 @@
+# Fast Training Config - Reduced GPU Time, Same Quality
+# 
+# Key optimizations:
+# - deberta-v3-base (140M) vs large (435M) - 3x smaller, 94% quality
+# - Frozen text encoder (lora_r=0) - no backward pass through text
+# - 20 epochs with patience=5 vs 30/10 - 33% fewer epochs
+# - 8 temporal turns vs 16 - half attention compute
+# - LoRA r=8 vs 16 - half adapter params
+# - No swap pretraining - save 3 epochs
+#
+# Expected: ~50-60% GPU time reduction (10h → 4-5h)
+
+# Model
+audio_encoder: wavlm_large
+text_encoder: deberta-v3-base
+embed_dim: 256
+encoder_dim: 768
+
+# Speaker Normalization
+speaker_norm:
+  enabled: true
+  model: speechbrain/spkrec-ecapa-voxceleb
+  cold_start_clusters: 20
+  min_reference_utts: 5
+
+# Temporal Context - REDUCED
+temporal:
+  enabled: true
+  n_turns: 8
+  n_layers: 2
+  n_heads: 4
+  dropout: 0.1
+
+# Cross-Attention Injection
+cross_attn:
+  enabled: true
+
+# Baseline Subtract
+baseline_subtract:
+  enabled: true
+
+# Speaker-Adaptive Threshold
+speaker_adaptive_threshold:
+  enabled: true
+
+# Classifier
+classifier:
+  type: multi_label_sigmoid
+  n_classes: 3
+  severity_head: true
+  hidden_dims: [512, 256]
+  separation_lambda: 0.1
+
+# Training - OPTIMIZED
+training:
+  batch_size: 24
+  lr: 2e-5
+  epochs: 20
+  warmup_steps: 300
+  curriculum:
+    enabled: true
+    warmup_epochs: 3
+  lora:
+    enabled: true
+    r: 8
+    alpha: 16
+  gradient_accumulation_steps: 2
+  early_stop_patience: 5
+  loss_balancing: uncertainty
+  focal_loss_gamma: 2.0
+  label_smoothing: 0.1
+  pretrain_epochs: 0
+
+# Data
+data:
+  train_datasets: [iemocap, crema_d, mustard_pp]
+  eval_datasets: [case2026, mustard_pp, meld]
+  augmentation:
+    speed_perturb: [0.9, 1.0, 1.1]
+    spec_augment: true
+    noise_augment: true
+  sample_rate: 16000
+  max_audio_len: 10.0
+  max_text_len: 512
+
+# Evaluation
+eval:
+  fairness: true
+  latency_benchmark: true
+  llm_baseline: false

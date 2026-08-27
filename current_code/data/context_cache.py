@@ -55,16 +55,19 @@ class ContextCache:
 
     def get_batch_context(
         self, conv_ids: List[str], embed_dim: int = 256
-    ) -> tuple[torch.Tensor, torch.Tensor, List[str]]:
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], List[str]]:
         """Get padded context for a batch of conversations.
 
         Returns:
-            - ``context_embeds: (B, T_pad, embed_dim)`` — zero-padded context
-              sequences. Samples with no history get all-zero context.
-            - ``context_padding: (B, T_pad)`` bool mask (True = padded).
+            - ``context_embeds: (B, T_pad, embed_dim) or None`` — zero-padded
+              context sequences. None when no conversation has history.
+            - ``context_padding: (B, T_pad) or None`` — bool mask (True = padded).
             - ``context_conversations: (B,)`` same conv_ids.
         """
         B = len(conv_ids)
+        if len(self._cache) == 0:
+            return None, None, conv_ids
+
         contexts: List[Optional[torch.Tensor]] = [
             self.get_context(cid) for cid in conv_ids
         ]
@@ -72,9 +75,7 @@ class ContextCache:
             (ctx.size(0) for ctx in contexts if ctx is not None), default=0
         )
         if max_len == 0:
-            embeds = torch.zeros(B, 1, embed_dim, device=self.device)
-            padding = torch.ones(B, 1, dtype=torch.bool, device=self.device)
-            return embeds, padding, conv_ids
+            return None, None, conv_ids
 
         T = max(1, min(max_len, self.max_turns))
         embeds = torch.zeros(B, T, embed_dim, device=self.device)

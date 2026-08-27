@@ -86,7 +86,7 @@ class Wav2Vec2Encoder(nn.Module):
 class WavLMEncoder(nn.Module):
     """WavLM, falls back to spectrogram."""
 
-    def __init__(self, model_name: str = "microsoft/wavlm-large", freeze: bool = True):
+    def __init__(self, model_name: str = "microsoft/wavlm-base-plus", freeze: bool = True):
         super().__init__()
         local_path = os.environ.get("CONFLICTNET_WAVLM_PATH")
         if local_path:

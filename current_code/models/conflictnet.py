@@ -65,6 +65,32 @@ class ConflictNetOutput:
 
 
 # ---------------------------------------------------------------------------
+# Focal loss for multi-label classification (handles class imbalance)
+# ---------------------------------------------------------------------------
+
+def focal_loss_with_logits(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    gamma: float = 2.0,
+    alpha: float = 0.25,
+) -> torch.Tensor:
+    """Focal loss for multi-label BCE.
+
+    ``gamma`` controls the down-weighting of easy examples:
+      gamma=0 → standard BCE; gamma=2 → focal loss (recommended).
+
+    ``alpha`` balances positive/negative class weight.
+    The default 0.25 works well for binary problems with ≤25% positives.
+
+    Ref: Lin et al. "Focal Loss for Dense Object Detection" (2017).
+    """
+    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    pt = torch.exp(-bce)
+    focal = alpha * (1 - pt) ** gamma * bce
+    return focal.mean()
+
+
+# ---------------------------------------------------------------------------
 # Self-supervised swap pre-training objective
 # ---------------------------------------------------------------------------
 
@@ -105,19 +131,22 @@ class SwapPretrainingObjective(nn.Module):
 
         perm = torch.randperm(B, device=device)
 
-        # Randomly choose audio-swap (left) or text-swap (right) for each item
         use_audio_swap = torch.rand(B, device=device) < 0.5
-        pair_feats = []
+        swap_exp = swap_mask.unsqueeze(-1)
+        audio_swap_exp = use_audio_swap.unsqueeze(-1)
 
-        for i in range(B):
-            if not swap_mask[i]:
-                pair_feats.append(torch.cat([audio_embeds[i], text_embeds[i]], dim=0))
-            elif use_audio_swap[i]:
-                pair_feats.append(torch.cat([audio_embeds[perm[i]], text_embeds[i]], dim=0))
-            else:
-                pair_feats.append(torch.cat([audio_embeds[i], text_embeds[perm[i]]], dim=0))
+        pair_normal = torch.cat([audio_embeds, text_embeds], dim=-1)
+        pair_audio_swap = torch.cat([audio_embeds[perm], text_embeds], dim=-1)
+        pair_text_swap = torch.cat([audio_embeds, text_embeds[perm]], dim=-1)
 
-        pair_feat = torch.stack(pair_feats)
+        pair_feat = torch.where(
+            swap_exp & audio_swap_exp, pair_audio_swap,
+            torch.where(
+                swap_exp & ~audio_swap_exp, pair_text_swap,
+                pair_normal,
+            ),
+        )
+
         logits = self.swap_classifier(pair_feat).squeeze(-1)
         return F.binary_cross_entropy_with_logits(logits, swap_labels)
 
@@ -185,6 +214,8 @@ class ConflictNet(nn.Module):
         use_baseline_subtract: bool = True,
         lora_r: int = 16,
         lora_alpha: int = 32,
+        focal_loss_gamma: float = 0.0,
+        label_smoothing: float = 0.0,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -195,6 +226,8 @@ class ConflictNet(nn.Module):
         self.use_cross_attn_injection = use_cross_attn_injection
         self.use_speaker_adaptive_threshold = use_speaker_adaptive_threshold
         self.use_baseline_subtract = use_baseline_subtract
+        self.focal_loss_gamma = focal_loss_gamma
+        self.label_smoothing = label_smoothing
 
         # 1. Encoders
         self.audio_encoder = build_audio_encoder(audio_encoder_name)
@@ -466,11 +499,19 @@ class ConflictNet(nn.Module):
             )
             losses.append(cl)
 
-            # 6b. Multi-label BCE loss for conflict types
+            # 6b. Multi-label classification loss (focal or BCE with optional smoothing)
             if conflict_type_labels is not None:
-                type_loss = nn.functional.binary_cross_entropy_with_logits(
-                    logits_type, conflict_type_labels.float()
-                )
+                targets = conflict_type_labels.float()
+                if self.label_smoothing > 0.0:
+                    targets = targets * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+                if self.focal_loss_gamma > 0.0:
+                    type_loss = focal_loss_with_logits(
+                        logits_type, targets, gamma=self.focal_loss_gamma,
+                    )
+                else:
+                    type_loss = nn.functional.binary_cross_entropy_with_logits(
+                        logits_type, targets,
+                    )
                 losses.append(type_loss)
             else:
                 losses.append(torch.tensor(0.0, device=audio.device))
@@ -492,7 +533,7 @@ class ConflictNet(nn.Module):
             loss, sigma_weights = self.multi_task_loss(losses)
             loss_breakdown = {
                 "contrastive": losses[0].detach().item(),
-                "type_bce": losses[1].detach().item(),
+                "type_loss": losses[1].detach().item(),
                 "severity_mse": losses[2].detach().item(),
                 **sigma_weights,
             }

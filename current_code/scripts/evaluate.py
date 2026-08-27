@@ -38,8 +38,12 @@ def parse_args():
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
     p.add_argument("--case_root", type=str, default=None, help="CASE 2026 benchmark root")
+    p.add_argument("--num_workers", type=int, default=2,
+                   help="DataLoader worker processes")
+    p.add_argument("--prefetch_factor", type=int, default=2,
+                   help="Samples prefetched per worker")
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--device", type=str, default=None)
     p.add_argument("--fairness", action="store_true", help="Run fairness audit")
     p.add_argument("--attribution", action="store_true", help="Compute IG attribution")
     p.add_argument("--llm_baseline", action="store_true", help="Run GPT-4o text baseline")
@@ -56,6 +60,10 @@ def main():
     args = parse_args()
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    from models.device_utils import resolve_device, supports_pin_memory, supports_non_blocking
+    if args.device is None:
+        args.device = resolve_device()
 
     # --- Load model ---
     from models.conflictnet import ConflictNet
@@ -103,16 +111,18 @@ def main():
         raise ValueError("Provide at least one of --iemocap_root, --mustard_root, or --case_root")
 
     eval_set = ConcatDataset(eval_datasets)
-    pin = (args.device != "cpu")  # pin_memory only valid for CUDA
+    pin = supports_pin_memory(args.device)
     eval_collate = make_collate_fn(prosody_lookup=prosody_lookup)
-    eval_loader = DataLoader(
-        eval_set,
+    loader_kwargs = dict(
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
-        pin_memory=pin,          # let PyTorch handle pinning automatically
+        num_workers=args.num_workers,
+        pin_memory=pin,
         collate_fn=eval_collate,
     )
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+    eval_loader = DataLoader(eval_set, **loader_kwargs)
 
     # --- Run inference ---
     all_probs, all_labels, all_genders = [], [], []
@@ -123,7 +133,7 @@ def main():
         for batch in eval_loader:
             # non_blocking=True pairs with pin_memory=True for async H→D transfers
             batch_gpu = {
-                k: v.to(args.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(args.device, non_blocking=supports_non_blocking(args.device)) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(

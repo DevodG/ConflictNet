@@ -93,6 +93,16 @@ class TestMetrics:
         metrics = compute_all_metrics(probs, labels, severity_pred=sev_pred, severity_true=sev_true)
         assert "severity_mae" not in metrics or not np.isnan(metrics["severity_mae"])
 
+    def test_ece_uses_labels_not_thresholded_predictions(self):
+        from evaluation.metrics import compute_all_metrics
+        # A confidently wrong model must have high calibration error. The
+        # former implementation compared confidence with its own prediction
+        # and incorrectly reported zero error for this case.
+        probs = np.full((4, 1), 0.9)
+        labels = np.zeros((4, 1), dtype=int)
+        metrics = compute_all_metrics(probs, labels)
+        assert metrics["ece_macro"] == pytest.approx(0.9)
+
     def test_custom_type_names(self):
         from evaluation.metrics import compute_all_metrics
         N = 5

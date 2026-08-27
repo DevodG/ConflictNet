@@ -98,36 +98,35 @@ def evaluate_on_dataset(
         logger.warning(f"[Bench] {dataset_name}: empty dataset, skipping")
         return {}
 
+    from models.device_utils import supports_pin_memory, supports_non_blocking
+
     collate = make_collate_fn(prosody_lookup=prosody_lookup)
     loader = DataLoader(
         ds, batch_size=batch_size, shuffle=False,
-        num_workers=2, pin_memory=(device != "cpu"), collate_fn=collate,
+        num_workers=2, pin_memory=supports_pin_memory(device), collate_fn=collate,
     )
 
-    all_probs, all_labels = [], []
-    all_sev_pred, all_sev_true = [], []
-    all_genders, all_speakers = [], []
-
-    for batch in loader:
-        batch_gpu = {
-            k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
-        out = model(
-            audio=batch_gpu["audio"],
-            input_ids=batch_gpu["input_ids"],
-            attention_mask=batch_gpu["attention_mask"],
-            audio_attention_mask=batch_gpu.get("audio_attention_mask"),
-            prosody_z=batch_gpu.get("prosody_z"),
-        )
-        all_probs.append(out.probs_type.cpu().numpy())
-        all_labels.append(batch["conflict_type_labels"].numpy())
-        if out.severity is not None:
-            all_sev_pred.append(out.severity.squeeze(-1).cpu().numpy())
-        if "severity" in batch:
-            all_sev_true.append(batch["severity"].squeeze(-1).numpy())
-        all_genders.extend(batch.get("genders", [None] * batch["audio"].size(0)))
-        all_speakers.extend(batch.get("speaker_ids", [None] * batch["audio"].size(0)))
+    with torch.no_grad():
+        for batch in loader:
+            batch_gpu = {
+                k: v.to(device, non_blocking=supports_non_blocking(device)) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+            out = model(
+                audio=batch_gpu["audio"],
+                input_ids=batch_gpu["input_ids"],
+                attention_mask=batch_gpu["attention_mask"],
+                audio_attention_mask=batch_gpu.get("audio_attention_mask"),
+                prosody_z=batch_gpu.get("prosody_z"),
+            )
+            all_probs.append(out.probs_type.cpu().numpy())
+            all_labels.append(batch["conflict_type_labels"].numpy())
+            if out.severity is not None:
+                all_sev_pred.append(out.severity.squeeze(-1).cpu().numpy())
+            if "severity" in batch:
+                all_sev_true.append(batch["severity"].squeeze(-1).numpy())
+            all_genders.extend(batch.get("genders", [None] * batch["audio"].size(0)))
+            all_speakers.extend(batch.get("speaker_ids", [None] * batch["audio"].size(0)))
 
     probs = np.concatenate(all_probs, axis=0)
     labels = np.concatenate(all_labels, axis=0)
@@ -249,7 +248,7 @@ def parse_args():
     p.add_argument("--mosei_root", type=str, default=None)
     p.add_argument("--case_root", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--device", type=str, default=None)
     p.add_argument("--output_dir", type=str, default="benchmark_results")
     p.add_argument("--prosody_stats", type=str, default=None)
     p.add_argument("--calibrate", action="store_true", help="Run multi-source calibration")
@@ -280,6 +279,9 @@ def main():
         raise ValueError("Provide at least one dataset root")
 
     # Load model
+    from models.device_utils import resolve_device
+    if args.device is None:
+        args.device = resolve_device()
     model = load_model(args.checkpoint, args.device)
 
     # Load prosody z-scores if available

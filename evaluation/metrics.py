@@ -20,6 +20,8 @@ from sklearn.metrics import (  # type: ignore
     average_precision_score,
     f1_score,
     mean_absolute_error,
+    precision_score,
+    recall_score,
     roc_auc_score,
 )
 
@@ -51,8 +53,10 @@ def compute_all_metrics(
     # Binary predictions via threshold
     preds_type = (probs_type >= type_threshold).astype(int)
 
-    # Macro F1 across types
+    # Macro F1, precision, recall across types
     metrics["macro_f1"] = f1_score(labels_type, preds_type, average="macro", zero_division=0)
+    metrics["macro_precision"] = precision_score(labels_type, preds_type, average="macro", zero_division=0)
+    metrics["macro_recall"] = recall_score(labels_type, preds_type, average="macro", zero_division=0)
 
     # Per-type metrics
     for i, name in enumerate(type_names[:n_types]):
@@ -61,6 +65,8 @@ def compute_all_metrics(
         pred = preds_type[:, i]
 
         metrics[f"f1_{name}"] = f1_score(y, pred, zero_division=0)
+        metrics[f"precision_{name}"] = precision_score(y, pred, zero_division=0)
+        metrics[f"recall_{name}"] = recall_score(y, pred, zero_division=0)
         if y.sum() > 0:
             metrics[f"ap_{name}"] = average_precision_score(y, p)
             try:
@@ -72,11 +78,30 @@ def compute_all_metrics(
     conflict_pred = preds_type.any(axis=1).astype(int)
     conflict_true = labels_type.any(axis=1).astype(int)
     metrics["binary_f1"] = f1_score(conflict_true, conflict_pred, zero_division=0)
+    metrics["binary_precision"] = precision_score(conflict_true, conflict_pred, zero_division=0)
+    metrics["binary_recall"] = recall_score(conflict_true, conflict_pred, zero_division=0)
     metrics["binary_acc"] = accuracy_score(conflict_true, conflict_pred)
     try:
         metrics["binary_auc"] = roc_auc_score(conflict_true, probs_type.max(axis=1))
     except ValueError:
         metrics["binary_auc"] = float("nan")
+
+    # ECE (Expected Calibration Error) — per-class, macro-averaged
+    n_bins = 10
+    bin_boundaries = np.linspace(0, 1, n_bins + 1)
+    ece_per_class = []
+    for i in range(n_types):
+        confs = probs_type[:, i]
+        # Calibration measures whether a confidence value matches the
+        # observed outcome, not whether it agrees with our own threshold.
+        accs = labels_type[:, i]
+        ece_c = 0.0
+        for b in range(n_bins):
+            in_bin = (confs > bin_boundaries[b]) & (confs <= bin_boundaries[b + 1])
+            if in_bin.any():
+                ece_c += abs(accs[in_bin].mean() - confs[in_bin].mean()) * in_bin.sum()
+        ece_per_class.append(ece_c / max(len(confs), 1))
+    metrics["ece_macro"] = float(np.mean(ece_per_class))
 
     # Weighted accuracy (sklearn accuracy_score uses equal weights by default)
     # WAcc = accuracy weighted by inverse class frequency

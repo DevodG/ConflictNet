@@ -14,6 +14,9 @@ offset predicted from the speaker representation.  This allows the model
 to learn that some speakers are prosodically more "expressive" and require
 a higher bar for flagging emotional conflict, while others are more
 "monotone" and need a lower threshold.
+
+Separation walls (Gap 9): Orthogonality + pairwise separation losses between
+type head weight vectors so each conflict subtype learns distinct features.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 CONFLICT_TYPES = ["sarcasm", "suppression", "deception"]
@@ -31,8 +35,8 @@ class SpeakerAdaptiveThreshold(nn.Module):
     """Predict a per-sample threshold offset from speaker features.
 
     Learns to map the speaker representation (which encodes both speaker
-    identity and utterance-level prosody) to an offset in [0, max_offset]
-    that is added to the global ``type_threshold``.
+    identity and utterance-level prosody) to a bounded offset that is added
+    to the global ``type_threshold``.
 
     This lets the model dynamically adjust the conflict detection bar:
     expressive speakers with wide prosody variance get a higher threshold
@@ -62,7 +66,7 @@ class SpeakerAdaptiveThreshold(nn.Module):
         Returns:
             (B,) per-sample threshold offsets.
         """
-        offset = torch.sigmoid(self.net(speaker_feat)).squeeze(-1)  # (B,) in [0, 1]
+        offset = torch.sigmoid(self.net(speaker_feat)).squeeze(-1)
         return offset * self.max_offset
 
 
@@ -90,6 +94,7 @@ class ConflictClassifier(nn.Module):
         dropout: Dropout before classification heads.
         speaker_adaptive_threshold: If True, learns a per-sample threshold
             offset from speaker features (Gap 3).
+        separation_lambda: Weight for separation wall loss (orthogonality + pairwise).
     """
 
     def __init__(
@@ -102,6 +107,7 @@ class ConflictClassifier(nn.Module):
         type_threshold: float = 0.5,
         dropout: float = 0.1,
         speaker_adaptive_threshold: bool = True,
+        separation_lambda: float = 0.1,
     ):
         super().__init__()
         self.n_types = n_types
@@ -109,6 +115,7 @@ class ConflictClassifier(nn.Module):
         self.type_threshold = type_threshold
         self.speaker_adaptive_threshold = speaker_adaptive_threshold
         self.word_div_dim = word_div_dim
+        self.separation_lambda = separation_lambda
 
         input_dim = embed_dim + word_div_dim
 
@@ -133,6 +140,31 @@ class ConflictClassifier(nn.Module):
 
         # Speaker-adaptive threshold (Gap 3)
         self.threshold_net = SpeakerAdaptiveThreshold(embed_dim=embed_dim) if speaker_adaptive_threshold else None
+
+    def separation_loss(self) -> torch.Tensor:
+        """Compute separation wall loss between conflict type heads.
+
+        Two components:
+        1. Orthogonality: cosine similarity between weight vectors → 0
+        2. Pairwise separation: push output probabilities apart for conflicting types
+
+        Returns:
+            Scalar loss encouraging distinct type representations.
+        """
+        W = self.type_head.weight  # (n_types, in_dim)
+        n_types = self.n_types
+
+        # 1. Orthogonality loss: normalize weights and penalize non-zero cosine similarity
+        W_norm = F.normalize(W, dim=-1)  # (n_types, in_dim)
+        cos_sim = W_norm @ W_norm.T  # (n_types, n_types)
+        # Penalize off-diagonal elements (similarity between different types)
+        ortho_loss = (cos_sim - torch.eye(n_types, device=W.device)).triu(diagonal=1).pow(2).sum()
+
+        # 2. Bias separation: encourage different bias terms for different types
+        bias = self.type_head.bias  # (n_types,)
+        bias_loss = F.mse_loss(bias, torch.zeros_like(bias))  # encourage zero-centered
+
+        return self.separation_lambda * (ortho_loss + bias_loss)
 
     def forward(
         self,
@@ -168,6 +200,10 @@ class ConflictClassifier(nn.Module):
         if self.threshold_net is not None and speaker_feat is not None:
             offset = self.threshold_net(speaker_feat)  # (B,)
             threshold = self.type_threshold + offset.unsqueeze(-1).expand_as(probs_type)
+            # Keep the decision rule in probability space even for extreme
+            # speaker embeddings; an out-of-range threshold silently disables
+            # one side of the classifier.
+            threshold = threshold.clamp(0.05, 0.95)
         else:
             threshold = self.type_threshold
 

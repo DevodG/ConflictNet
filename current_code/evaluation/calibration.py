@@ -346,8 +346,10 @@ def _inference(
     all_probs, all_labels = [], []
     with torch.no_grad():
         for batch in loader:
+            from models.device_utils import supports_non_blocking
+            non_block = supports_non_blocking(device if isinstance(device, str) else device.type)
             batch_gpu = {
-                k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                k: v.to(device, non_blocking=non_block) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
             out = model(
@@ -414,7 +416,7 @@ def main():
                 continue
             loader = DataLoader(
                 ds, batch_size=args.batch_size, shuffle=False,
-                num_workers=2, pin_memory=True, collate_fn=conflictnet_collate_fn,
+                num_workers=2, pin_memory=False, collate_fn=conflictnet_collate_fn,
             )
             probs, labels = _inference(model, loader, device)
             source_probs[name] = probs

@@ -22,7 +22,8 @@ def main():
     CREMAD = "/teamspace/studios/this_studio/.cache/kagglehub/datasets/ejlok1/cremad/versions/1"
     CKPT = "/teamspace/studios/this_studio/conflictnet/checkpoints/best_model.safetensors"
     META = "/teamspace/studios/this_studio/conflictnet/checkpoints/best_model_meta.json"
-    DEVICE = "cuda"
+    from models.device_utils import resolve_device, supports_pin_memory, supports_non_blocking
+    DEVICE = resolve_device()
 
     with open(META) as f:
         meta = _json.load(f)
@@ -38,14 +39,14 @@ def main():
     print(f"Model: {ec.get('audio_encoder', 'wavlm')}, params: {sum(p.numel() for p in model.parameters()):,}")
 
     ds = CREMADDataset(CREMAD, split="val")
-    loader = DataLoader(ds, batch_size=32, shuffle=False, num_workers=2, pin_memory=True, collate_fn=make_collate_fn())
+    loader = DataLoader(ds, batch_size=32, shuffle=False, num_workers=2, pin_memory=supports_pin_memory(DEVICE), collate_fn=make_collate_fn())
 
     all_probs, all_labels, all_sev_pred, all_sev_true = [], [], [], []
     t0 = time.time()
 
     with torch.no_grad():
         for b in loader:
-            bg = {k: v.to(DEVICE, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in b.items()}
+            bg = {k: v.to(DEVICE, non_blocking=supports_non_blocking(DEVICE)) if isinstance(v, torch.Tensor) else v for k, v in b.items()}
             out = model(audio=bg["audio"], input_ids=bg["input_ids"], attention_mask=bg["attention_mask"])
             all_probs.append(out.probs_type.cpu().numpy())
             all_labels.append(b["conflict_type_labels"].numpy())

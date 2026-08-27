@@ -37,6 +37,7 @@ class CurriculumSampler(Sampler):
         max_epochs: int = 30,
         warmup_epochs: int = 5,
         shuffle: bool = True,
+        seed: int = 42,
     ):
         super().__init__()
         self.difficulties = np.array(difficulties)
@@ -44,6 +45,7 @@ class CurriculumSampler(Sampler):
         self.max_epochs = max_epochs
         self.warmup_epochs = warmup_epochs
         self.shuffle = shuffle
+        self.seed = seed
 
     def set_epoch(self, epoch: int):
         self.epoch = epoch
@@ -63,7 +65,8 @@ class CurriculumSampler(Sampler):
         if len(indices) == 0:
             indices = np.arange(len(self.difficulties))
         if self.shuffle:
-            np.random.shuffle(indices)
+            # Deterministic per epoch: reproducible while still varying order.
+            np.random.default_rng(self.seed + self.epoch).shuffle(indices)
         return iter(indices.tolist())
 
     def __len__(self) -> int:

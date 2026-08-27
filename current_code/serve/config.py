@@ -7,7 +7,7 @@ from typing import List
 @dataclass
 class ServeConfig:
     checkpoint_path: str = "checkpoints/best_model.safetensors"
-    device: str = "cuda"
+    device: str = "auto"
     host: str = "0.0.0.0"
     port: int = 8000
     max_audio_len: float = 10.0

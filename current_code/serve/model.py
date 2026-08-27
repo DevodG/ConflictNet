@@ -31,7 +31,9 @@ class ServeModel:
 
     def __init__(self, cfg: Any):
         self.cfg = cfg
-        self.device = torch.device(cfg.device if torch.cuda.is_available() and cfg.device == "cuda" else "cpu")
+        from models.device_utils import resolve_device
+        resolved = resolve_device(cfg.device if cfg.device != "auto" else None)
+        self.device = torch.device(resolved)
         self.model: Optional[ConflictNet] = None
         self.tokenizer: Optional[AutoTokenizer] = None
 

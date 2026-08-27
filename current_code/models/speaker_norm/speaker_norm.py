@@ -364,8 +364,8 @@ class SpeakerNormalizer(nn.Module):
                     savedir=f"pretrained_models/{self._model_source.replace('/', '_')}",
                 )
                 logger.info(f"[SpeakerNorm] Loaded ECAPA-TDNN from {self._model_source}")
-            except ImportError:
-                logger.warning("[SpeakerNorm] SpeechBrain not installed — speaker embedding disabled")
+            except Exception:
+                logger.warning("[SpeakerNorm] SpeechBrain unavailable — speaker embedding disabled")
                 self._spk_model = "disabled"
         return self._spk_model
 
@@ -380,7 +380,7 @@ class SpeakerNormalizer(nn.Module):
         if isinstance(model, str) or model is None:
             return torch.zeros(audio.size(0), self._spk_embed_dim, device=audio.device)
         embeddings = model.encode_batch(audio)  # (B, 1, 192)
-        return embeddings.squeeze(1)            # (B, 192)
+        return embeddings.squeeze(1).to(audio.device)  # SR may return CPU tensor
 
     def precompute_prosody_z(
         self,
