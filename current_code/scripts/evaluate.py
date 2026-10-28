@@ -48,6 +48,8 @@ def parse_args():
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--fairness", action="store_true", help="Run fairness audit")
     p.add_argument("--attribution", action="store_true", help="Compute IG attribution")
+    p.add_argument("--dump_npz", type=str, default=None,
+                   help="Save probs/labels arrays (.npz) for scripts/stats.py")
     p.add_argument("--llm_baseline", action="store_true", help="Run GPT-4o text baseline")
     p.add_argument("--llm_max_samples", type=int, default=200,
                    help="Max eval samples for the LLM baseline (cost bound)")
@@ -175,6 +177,11 @@ def main():
 
     with open(out_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
+    if args.dump_npz:
+        np.savez(args.dump_npz,
+                 probs=all_probs[real_type_mask],
+                 labels=all_labels[real_type_mask])
+        logger.info(f"[Eval] Dumped real-label probs/labels → {args.dump_npz}")
 
     # --- Fairness audit ---
     if args.fairness:
