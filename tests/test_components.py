@@ -351,7 +351,9 @@ class TestClassifier:
         spk_feat = torch.randn(4, 32)
         offset = sat(spk_feat)
         assert offset.shape == (4,)
-        assert (offset >= 0).all() and (offset <= 0.3).all()
+        # Symmetric range: expressive speakers raise, monotone speakers lower
+        # the bar (see module docstring). A [0, +0.3] range could only raise it.
+        assert (offset >= -0.3).all() and (offset <= 0.3).all()
 
         clf = ConflictClassifier(embed_dim=32, n_types=3, speaker_adaptive_threshold=True)
         fused = torch.randn(4, 32)

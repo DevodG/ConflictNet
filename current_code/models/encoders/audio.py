@@ -175,7 +175,13 @@ class Emotion2VecEncoder(nn.Module):
             if isinstance(emb, list) and len(emb) > 0 and isinstance(emb[0], dict):
                 emb = emb[0].get("feats", emb[0])
             emb = np.mean(emb, axis=0) if emb.ndim > 1 else emb
-            results.append(torch.from_numpy(emb).float())
+            if emb.shape[-1] != self.output_dim:
+                raise RuntimeError(
+                    f"[Emotion2Vec] funasr embedding dim {emb.shape[-1]} != "
+                    f"expected {self.output_dim} — projection head would silently "
+                    "mis-project. Pin a matching emotion2vec checkpoint."
+                )
+            results.append(torch.from_numpy(np.ascontiguousarray(emb)).float())
         return torch.stack(results).to(audio.device)
 
     @property

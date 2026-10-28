@@ -58,7 +58,6 @@ class CachedEmbeddingDataset(Dataset):
         self.binary = data["conflict_binary"]
 
         N = self.audio_embed.size(0)
-        idxs = list(range(N))
         rng = torch.Generator().manual_seed(seed)
         perm = torch.randperm(N, generator=rng).tolist()
 

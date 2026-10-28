@@ -121,7 +121,11 @@ def scan_mustard(
 
     Uses speaker-stratified split: group by speaker, assign whole speakers to train/val.
     """
-    # Load data from JSON if available
+    # Load data from JSON if available (auto-locate the dataset default)
+    if json_path is None:
+        candidate = Path(root) / "mustard++_raw_data.json"
+        if candidate.exists():
+            json_path = str(candidate)
     data = {}
     if json_path and Path(json_path).exists():
         with open(json_path) as f:
@@ -131,22 +135,32 @@ def scan_mustard(
     root_p = Path(root)
     wav_dirs = list(root_p.rglob("*.wav"))
     
-    # Collect all samples with speaker info
+    # Collect all samples with speaker info. Speaker keys MUST match
+    # MUStARDDataset (data/datasets.py), which groups by the JSON "speaker"
+    # field (character name) — grouping by wav directory here would assign
+    # different speakers to train/val than the dataset does.
     all_samples = []
     for wav in wav_dirs:
-        spk = wav.parent.stem
         # Find matching key in JSON data
         matching_key = None
         for key in data.keys():
             if key in wav.stem:
                 matching_key = key
                 break
-        sarcasm = int(data.get(matching_key, {}).get("sarcasm", 0)) if matching_key else 0
+        if matching_key is not None:
+            speaker_id = str(data[matching_key].get("speaker", "unknown"))
+            sarcasm = int(data[matching_key].get("sarcasm", 0))
+        else:
+            speaker_id = wav.parent.stem
+            sarcasm = 0
         all_samples.append({
             "wav_path": str(wav),
-            "speaker_id": f"mustard_{spk}",
+            "speaker_id": speaker_id,
             "sarcasm": sarcasm,
         })
+    if not data:
+        logger.warning("[scan_mustard] No JSON metadata — falling back to wav-directory "
+                       "speaker grouping, which may mismatch MUStARDDataset splits")
 
     # Speaker-stratified split: group by speaker, assign whole speakers to train/val
     speaker_groups: Dict[str, List[Dict]] = {}
@@ -236,6 +250,8 @@ def scan_meld(
     Only splits in ``train_splits`` are flagged as training data.
     Default: only "train" split contributes to statistics.
     """
+    import csv as _csv
+
     items = []
     root_p = Path(root)
     for split_name in ("train", "dev", "test"):
@@ -243,9 +259,27 @@ def scan_meld(
         if not wav_dir.exists():
             continue
         is_train = split_name in train_splits
+        # Map wav stems to speakers via the split CSV so stats group the same
+        # populations MELDDataset uses (meld_<speaker>), not one pseudo-
+        # speaker per split.
+        stem_to_speaker: Dict[str, str] = {}
+        csv_path = root_p / split_name / f"{split_name}_sent_emo.csv"
+        if csv_path.exists():
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = _csv.DictReader(f)
+                cols = [c.strip() for c in reader.fieldnames or []]
+                low = [c.lower().replace("-", "_").replace(" ", "_") for c in cols]
+                try:
+                    dia_c = cols[low.index("dialogue_id")]
+                    utt_c = cols[low.index("utterance_id")]
+                    spk_c = cols[low.index("speaker")]
+                except ValueError:
+                    dia_c = utt_c = spk_c = None
+                if dia_c and utt_c and spk_c:
+                    for row in reader:
+                        stem_to_speaker[f"dia{row[dia_c]}_utt{row[utt_c]}"] = f"meld_{row[spk_c]}"
         for wav in wav_dir.glob("*.wav"):
-            # Use dialogue prefix as speaker proxy (no per-speaker dirs in MELD)
-            speaker = f"meld_{split_name}"
+            speaker = stem_to_speaker.get(wav.stem, f"meld_{split_name}")
             items.append((str(wav), speaker, None, is_train))
     return items
 

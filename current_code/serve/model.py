@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-import torchaudio
-import torchaudio.functional as AF
 from transformers import AutoTokenizer
 
 from models.checkpoint_utils import load_checkpoint_state, extract_model_state
@@ -175,15 +173,13 @@ class ServeModel:
         return results
 
     def _load_audio(self, audio_bytes: bytes) -> torch.Tensor:
-        stream = io.BytesIO(audio_bytes)
-        waveform, sr = torchaudio.load(stream)
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
-        if sr != self.SAMPLE_RATE:
-            waveform = AF.resample(waveform, sr, self.SAMPLE_RATE)
-        max_samples = int(self.MAX_AUDIO_LEN * self.SAMPLE_RATE)
-        waveform = waveform[:, :max_samples]
-        return waveform.squeeze(0)
+        from data.audio_io import read_mono
+
+        return read_mono(
+            io.BytesIO(audio_bytes),
+            target_sr=self.SAMPLE_RATE,
+            max_len_s=self.MAX_AUDIO_LEN,
+        )
 
     def _tokenize(self, text: str) -> Tuple[torch.Tensor, torch.Tensor]:
         assert self.tokenizer is not None

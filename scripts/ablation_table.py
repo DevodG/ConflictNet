@@ -8,8 +8,6 @@ import json
 import logging
 from pathlib import Path
 
-import torch
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,9 @@ def load_run_metrics(run_name, checkpoints_dir):
         "name": run_name,
         "best_val_f1": meta.get("best_val_f1", 0.0),
         "best_val_type_f1_micro": meta.get("best_val_type_f1_micro", 0.0),
-        "best_val_type_f1_macro": meta.get("best_val_type_f1_macro", 0.0),
+        "best_val_type_f1_macro": meta.get(
+            "best_val_type_f1_macro", meta.get("best_val_macro_f1", 0.0)
+        ),
         "best_val_severity_mse": meta.get("best_val_severity_mse", 0.0),
         "epoch": meta.get("epoch", 0),
         "trainable_params": meta.get("trainable_params", 0),

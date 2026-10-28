@@ -1,18 +1,19 @@
 # Fast Training Config - Reduced GPU Time, Same Quality
-# 
+#
 # Key optimizations:
-# - deberta-v3-base (140M) vs large (435M) - 3x smaller, 94% quality
 # - Frozen text encoder (lora_r=0) - no backward pass through text
 # - 20 epochs with patience=5 vs 30/10 - 33% fewer epochs
 # - 8 temporal turns vs 16 - half attention compute
-# - LoRA r=8 vs 16 - half adapter params
-# - No swap pretraining - save 3 epochs
+#
+# NOTE: text_encoder stays deberta-v3-large — a -base variant is not
+# implemented (DeBERTaEncoder has no model-name switch), so a base value
+# here would be silently ignored.
 #
 # Expected: ~50-60% GPU time reduction (10h → 4-5h)
 
 # Model
-audio_encoder: wavlm_large
-text_encoder: deberta-v3-base
+audio_encoder: wavlm
+text_encoder: deberta-v3-large
 embed_dim: 256
 encoder_dim: 768
 

@@ -177,44 +177,13 @@ def evaluate_on_dataset(
 def load_model(checkpoint_path: str, device: str) -> torch.nn.Module:
     """Load a trained ConflictNet from checkpoint.
 
-    Reads architecture config from the sidecar ``_meta.json`` file
-    (not from the safetensors weight dict, which contains no config keys).
+    Architecture (encoder, LoRA, ablation toggles, embedding size) is read
+    from the sidecar ``_meta.json`` file via :func:`load_conflictnet_model`
+    — never from constructor defaults.
     """
-    import json as _json
-    from pathlib import Path as _Path
-    from models.conflictnet import ConflictNet
-    from models.checkpoint_utils import load_checkpoint_state, extract_model_state
+    from models.checkpoint_utils import load_conflictnet_model
 
-    ckpt = load_checkpoint_state(checkpoint_path, device=device)
-    model_state = extract_model_state(ckpt)
-
-    # Read architecture config from sidecar _meta.json (B1 fix)
-    audio_encoder = "emotion2vec"
-    embed_dim = 256
-    ckpt_path = _Path(checkpoint_path)
-    meta_path = ckpt_path.parent / f"{ckpt_path.stem}_meta.json"
-    if meta_path.exists():
-        with open(meta_path) as f:
-            meta = _json.load(f)
-        exp_cfg = meta.get("experiment_config", {})
-        audio_encoder = exp_cfg.get("audio_encoder", audio_encoder)
-        embed_dim = exp_cfg.get("embed_dim", embed_dim)
-        logger.info(f"[Bench] Config from meta.json: audio_encoder={audio_encoder}, embed_dim={embed_dim}")
-    else:
-        logger.warning(f"[Bench] No _meta.json found at {meta_path}, using defaults (audio_encoder={audio_encoder})")
-
-    model = ConflictNet(
-        audio_encoder_name=audio_encoder,
-        embed_dim=embed_dim,
-    )
-    incompatible = model.load_state_dict(model_state, strict=False)
-    if incompatible.missing_keys or incompatible.unexpected_keys:
-        raise RuntimeError(
-            "Checkpoint architecture does not match the reconstructed model. "
-            f"Missing={incompatible.missing_keys}; unexpected={incompatible.unexpected_keys}"
-        )
-    model.to(device)
-    model.eval()
+    model, _ = load_conflictnet_model(checkpoint_path, device=device)
     logger.info(f"[Bench] Loaded checkpoint from {checkpoint_path}")
     return model
 
@@ -304,18 +273,16 @@ def main():
         args.device = resolve_device()
     model = load_model(args.checkpoint, args.device)
 
-    # Load prosody z-scores if available
+    # Load prosody z-scores if available (VAL split only — benchmarks must
+    # never consume train-normalised or combined statistics).
+    from data.datasets import load_prosody_lookups
+
     prosody_lookup = None
     if args.prosody_stats:
-        prosody_path = Path(args.prosody_stats)
-        zscores_p = prosody_path.parent / f"{prosody_path.stem}.zscores.json"
-        if not zscores_p.exists():
-            zscores_p = prosody_path.with_suffix(".zscores.json")
-        if zscores_p.exists():
-            with open(zscores_p) as f:
-                raw = json.load(f)
-            prosody_lookup = {k: torch.tensor(v) for k, v in raw.items()}
-            logger.info(f"[Bench] loaded {len(prosody_lookup)} z-score entries")
+        _, prosody_lookup, used_legacy = load_prosody_lookups(args.prosody_stats)
+        if used_legacy:
+            logger.warning("[Bench] REFUSING legacy combined z-scores for reported metrics")
+            prosody_lookup = None
 
     # Run per-dataset evaluation
     dataset_results = []

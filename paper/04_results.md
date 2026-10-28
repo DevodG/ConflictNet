@@ -1,24 +1,29 @@
 # Results
 
 > **Status:** Placeholder — to be populated after training runs with the corrected codebase.
-> Once the audit fixes (P0–P2) are applied, re-run all experiments and fill the tables below.
+> Reporting protocol (binding): every cell carries a bootstrap 95% CI from
+> `scripts/stats.py`; subtype macro-F1 only where real labels exist
+> (`empty_classes` must be empty for a full 3-type claim); CREMA-D column is
+> BINARY F1 only (no real subtype labels); thresholds frozen on val, applied
+> once to test; `retry_attempts` disclosed per run.
 
 ---
 
 ## Main Results
 
-Conflict detection performance on held-out test sets (weighted F1, macro-F1, and severity MAE).
+Conflict detection performance on held-out sets.
 
-| Model | IEMOCAP (WAcc) | IEMOCAP (F1) | MUStARD++ (F1) | CREMA-D (F1) | Severity MAE |
-|-------|----------------|--------------|----------------|---------------|--------------|
-| HuBERT-CLAP (baseline) | — | — | — | — | — |
-| ConflictNet (ours) | — | — | — | — | — |
-| _vs. prior SOTA_ | — | — | — | — | — |
+| Model | IEMOCAP sess-5 (binary F1) | MUStARD++ val (sarcasm F1) | CREMA-D val (binary F1) | Severity MAE |
+|-------|----------------------------|----------------------------|-------------------------|--------------|
+| WavLM+DeBERTa late-fusion (baseline) | — | — | — | — |
+| ConflictNet (ours) | — | — | — | — |
+| _vs. published SOTA_ | — | — | — | — |
 
 > **Dataset definitions:**
-> - IEMOCAP: session-level leave-one-session-out (4 train, 1 test).
-> - MUStARD++: speaker-stratified 80/20 split.
-> - CREMA-D: speaker-stratified 80/20 split (actors not shared across splits).
+> - IEMOCAP: sessions 1–4 train, session 5 held-out (speaker-disjoint). Binary F1 on the anger/frustration suppression-proxy.
+> - MUStARD++: speaker-stratified 80/20 split (seed 42). Sarcasm F1 (the only real subtype labels).
+> - CREMA-D: speaker-stratified 80/20 split (actors not shared across splits). Binary F1 via `scripts/eval_cremad.py`.
+> - Severity MAE: annotated splits only (currently none — column stays empty until CASE annotation).
 
 ---
 

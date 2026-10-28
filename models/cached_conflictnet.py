@@ -226,11 +226,18 @@ class CachedConflictNet(nn.Module):
             )
             losses.append(cl)
 
-            if conflict_type_labels is not None:
-                has_real_labels = has_real_type_labels
-                if has_real_labels is not None:
+            if conflict_type_labels is not None and not pretraining:
+                if has_real_type_labels is None:
+                    # Fail closed: without the real/proxy mask we cannot tell
+                    # annotated subtypes from emotion-proxy placeholders.
+                    logger.warning(
+                        "[CachedConflictNet] has_real_type_labels missing — skipping "
+                        "subtype loss instead of training on possible proxies"
+                    )
+                    losses.append(None)
+                else:
                     # Mask out samples with proxy labels
-                    real_mask = has_real_labels.bool()  # (B,)
+                    real_mask = has_real_type_labels.bool()  # (B,)
                     if real_mask.any():
                         targets = conflict_type_labels[real_mask].float()
                         logits_real = logits_type[real_mask]
@@ -243,20 +250,10 @@ class CachedConflictNet(nn.Module):
                         losses.append(type_loss)
                     else:
                         losses.append(None)
-                else:
-                    # Fallback: compute on all (backward compatibility)
-                    targets = conflict_type_labels.float()
-                    if self.label_smoothing > 0.0:
-                        targets = targets * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
-                    if self.focal_loss_gamma > 0.0:
-                        type_loss = focal_loss_with_logits(logits_type, targets, gamma=self.focal_loss_gamma)
-                    else:
-                        type_loss = nn.functional.binary_cross_entropy_with_logits(logits_type, targets)
-                    losses.append(type_loss)
             else:
                 losses.append(None)
 
-            if severity is not None and severity_labels is not None:
+            if severity is not None and severity_labels is not None and not pretraining:
                 sev_target = severity_labels.float().view(-1)
                 sev_pred = severity.view(-1)
                 # Mask out NaN severity labels

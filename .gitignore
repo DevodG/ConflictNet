@@ -24,7 +24,8 @@ Thumbs.db
 *.wav
 *.mp3
 *.flac
-*.json.zscores
+*.zscores.json
+prosody_stats.json
 
 # Models / checkpoints
 checkpoints/

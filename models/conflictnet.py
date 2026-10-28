@@ -486,14 +486,24 @@ class ConflictNet(nn.Module):
         # 4. Word-level divergence features
         word_div_feats = None
         if self.word_divergence is not None and need_frames:
-            assert audio_frames is not None and text_tokens is not None
-            assert word_timestamps is not None and token_word_boundaries is not None
-            word_div_feats = self.word_divergence.forward_from_encoder_hidden(
-                audio_frame_embeds=audio_frames,
-                text_token_embeds=text_tokens,
-                word_timestamps=word_timestamps,
-                token_word_boundaries=token_word_boundaries,
-            )
+            if audio_frames is None or text_tokens is None:
+                # e.g. Emotion2Vec funasr backend returns pooled embeddings
+                # only (no frames). Word divergence is optional: skip it and
+                # classify from fused embeddings instead of crashing.
+                if not self._word_div_warned:
+                    logger.warning(
+                        "WordDivergence skipped: encoder returned no frame/token "
+                        "embeddings (funasr backend has no frame output)"
+                    )
+                    self._word_div_warned = True
+            else:
+                assert word_timestamps is not None and token_word_boundaries is not None
+                word_div_feats = self.word_divergence.forward_from_encoder_hidden(
+                    audio_frame_embeds=audio_frames,
+                    text_token_embeds=text_tokens,
+                    word_timestamps=word_timestamps,
+                    token_word_boundaries=token_word_boundaries,
+                )
         elif self.word_divergence is not None and not self._word_div_warned:
             logger.warning(
                 "WordDivergence enabled but word_timestamps not provided. "
@@ -523,12 +533,20 @@ class ConflictNet(nn.Module):
             losses.append(cl)
 
             # 6b. Multi-label classification loss (focal or BCE with optional smoothing)
-            # Only compute on samples with real type labels (has_real_type_labels=True)
-            if conflict_type_labels is not None:
-                has_real_labels = has_real_type_labels
-                if has_real_labels is not None:
+            # Only compute on samples with real type labels (has_real_type_labels=True).
+            # Skipped entirely during swap pre-training (self-supervised phase).
+            if conflict_type_labels is not None and not pretraining:
+                if has_real_type_labels is None:
+                    # Fail closed: without the real/proxy mask we cannot tell
+                    # annotated subtypes from emotion-proxy placeholders.
+                    logger.warning(
+                        "[ConflictNet] has_real_type_labels missing — skipping "
+                        "subtype loss instead of training on possible proxies"
+                    )
+                    losses.append(None)
+                else:
                     # Mask out samples with proxy labels
-                    real_mask = has_real_labels.bool()  # (B,)
+                    real_mask = has_real_type_labels.bool()  # (B,)
                     if real_mask.any():
                         targets = conflict_type_labels[real_mask].float()
                         logits_real = logits_type[real_mask]
@@ -545,25 +563,11 @@ class ConflictNet(nn.Module):
                         losses.append(type_loss)
                     else:
                         losses.append(None)
-                else:
-                    # Fallback: compute on all (backward compatibility)
-                    targets = conflict_type_labels.float()
-                    if self.label_smoothing > 0.0:
-                        targets = targets * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
-                    if self.focal_loss_gamma > 0.0:
-                        type_loss = focal_loss_with_logits(
-                            logits_type, targets, gamma=self.focal_loss_gamma,
-                        )
-                    else:
-                        type_loss = nn.functional.binary_cross_entropy_with_logits(
-                            logits_type, targets,
-                        )
-                    losses.append(type_loss)
             else:
                 losses.append(None)
 
-            # 6c. Severity MSE loss (skip NaN labels)
-            if severity is not None and severity_labels is not None:
+            # 6c. Severity MSE loss (skip NaN labels; skipped during pre-training)
+            if severity is not None and severity_labels is not None and not pretraining:
                 sev_target = severity_labels.float().view(-1)
                 sev_pred = severity.view(-1)
                 # Mask out NaN severity labels

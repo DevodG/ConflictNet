@@ -53,7 +53,7 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
 
-    from models.device_utils import resolve_device, mps_optimized_config, supports_pin_memory, supports_non_blocking
+    from models.device_utils import resolve_device, mps_optimized_config
 
     if args.device is None:
         args.device = resolve_device()
@@ -66,8 +66,6 @@ def main():
         IEMOCAPDataset, MUStARDDataset, CREMADDataset, MELDDataset,
         make_collate_fn,
     )
-
-    from data.augmentation import AudioAugmentor
 
     # No augmentation during pre-compute (augmentation applied per-epoch, not here)
     collate_fn = make_collate_fn()

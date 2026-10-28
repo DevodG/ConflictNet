@@ -4,6 +4,7 @@ Endpoints:
   - ``GET  /health``        — health check (model loaded + ready)
   - ``POST /predict``       — single utterance prediction
   - ``POST /predict_batch`` — batch prediction
+  - ``WS   /ws``            — streaming dialogue inference (per-connection context)
 """
 
 from __future__ import annotations
@@ -127,6 +128,17 @@ def create_app(cfg: Optional[ServeConfig] = None) -> fastapi.FastAPI:
         except Exception as e:
             logger.exception("Batch prediction failed")
             raise HTTPException(status_code=500, detail=str(e))
+
+    from serve.websocket_handler import WebSocketHandler
+
+    ws_handler = WebSocketHandler(serve_model, cfg)
+
+    @app.websocket("/ws")
+    async def ws_endpoint(websocket: fastapi.WebSocket):
+        if serve_model.model is None:
+            await websocket.close(code=1013, reason="Model not loaded")
+            return
+        await ws_handler.handle(websocket)
 
     return app
 

@@ -33,7 +33,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torchaudio
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
@@ -56,14 +55,9 @@ CONFLICT_EMOTIONS = {"ang", "fru"}  # used for binary conflict label in IEMOCAP
 
 def load_audio(path: str, target_sr: int = SAMPLE_RATE, max_len: float = MAX_AUDIO_LEN) -> torch.Tensor:
     """Load and resample audio file to target_sr, truncate to max_len seconds."""
-    waveform, sr = torchaudio.load(path)
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)  # stereo → mono
-    if sr != target_sr:
-        waveform = torchaudio.functional.resample(waveform, sr, target_sr)
-    max_samples = int(max_len * target_sr)
-    waveform = waveform[:, :max_samples]
-    return waveform.squeeze(0)  # (T,)
+    from .audio_io import read_mono
+
+    return read_mono(path, target_sr=target_sr, max_len_s=max_len)  # (T,)
 
 
 def tokenize(
@@ -390,6 +384,8 @@ class MUStARDDataset(Dataset):
         speaker_ids = list(speaker_groups.keys())
         rng.shuffle(speaker_ids)
 
+        if split == "all":
+            return all_samples
         train_items: List[Dict] = []
         val_items: List[Dict] = []
         target_train = int(len(all_samples) * train_ratio)
@@ -606,7 +602,15 @@ class MELDDataset(Dataset):
 
     def _load_items(self) -> List[Dict]:
         split_map = {"train": "train", "val": "dev", "test": "test"}
+        if self.split == "all":
+            items: List[Dict] = []
+            for split_name in ("train", "dev", "test"):
+                items.extend(self._load_split(split_name))
+            return items
         split_name = split_map.get(self.split, self.split)
+        return self._load_split(split_name)
+
+    def _load_split(self, split_name: str) -> List[Dict]:
         csv_path = self.root / split_name / f"{split_name}_sent_emo.csv"
         wav_dir = self.root / split_name / f"{split_name}_splits"
 
@@ -1152,6 +1156,7 @@ def _collate_core(
         "genders": genders,
         "conversation_ids": conversation_ids,
         "turn_indices": turn_indices,
+        "utterance_ids": [str(b.get("utterance_id", f"utt_{i}")) for i, b in enumerate(batch)],
         "word_timestamps": word_timestamps,
         "token_word_boundaries": token_word_boundaries,
     }
@@ -1179,3 +1184,70 @@ def make_collate_fn(
 def conflictnet_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Default collate function without augmentation."""
     return _collate_core(batch, augmentor=None)
+
+
+def load_prosody_lookups(
+    prosody_stats: Any,
+) -> Tuple[Optional[Dict[str, torch.Tensor]], Optional[Dict[str, torch.Tensor]], bool]:
+    """Load train/val prosody z-score lookups from a compute_prosody_stats output.
+
+    Args:
+        prosody_stats: Path to the ``*.json`` stats file. Sibling
+            ``<stem>.train.zscores.json`` / ``<stem>.val.zscores.json`` files
+            (written by ``scripts/compute_prosody_stats.py``) are preferred.
+
+    Returns:
+        ``(train_lookup, val_lookup, used_legacy_combined)``. When only the
+        legacy single ``<stem>.zscores.json`` file exists, both lookups point
+        at the same combined data and ``used_legacy_combined`` is True — that
+        file carries train/val cross-contamination (L1/L2) and must never be
+        used for reported numbers.
+    """
+    train_lookup: Optional[Dict[str, torch.Tensor]] = None
+    val_lookup: Optional[Dict[str, torch.Tensor]] = None
+    used_legacy = False
+
+    def _load(path: Path) -> Optional[Dict[str, torch.Tensor]]:
+        try:
+            with open(path) as f:
+                raw = json.load(f)
+        except Exception as e:
+            logger.warning(f"[Prosody] failed to load {path}: {e}")
+            return None
+        lookup = {k: torch.tensor(v) for k, v in raw.items()}
+        return lookup or None
+
+    base = Path(prosody_stats)
+    train_p = base.with_suffix(".train.zscores.json")
+    val_p = base.with_suffix(".val.zscores.json")
+    legacy_p = base.with_suffix(".zscores.json")
+    if not legacy_p.exists():
+        legacy_p = base.parent / f"{base.stem}.zscores.json"
+
+    if train_p.exists():
+        train_lookup = _load(train_p)
+        if train_lookup is not None:
+            logger.info(f"[Prosody] loaded {len(train_lookup)} TRAIN z-score entries from {train_p}")
+    else:
+        logger.warning(f"[Prosody] train lookup file not found: {train_p}")
+    if val_p.exists():
+        val_lookup = _load(val_p)
+        if val_lookup is not None:
+            logger.info(f"[Prosody] loaded {len(val_lookup)} VAL z-score entries from {val_p}")
+    else:
+        logger.warning(f"[Prosody] val lookup file not found: {val_p}")
+
+    if (train_lookup is None or val_lookup is None) and legacy_p.exists():
+        legacy = _load(legacy_p)
+        if legacy is not None:
+            if train_lookup is None:
+                train_lookup = legacy
+            if val_lookup is None:
+                val_lookup = legacy
+            used_legacy = True
+            logger.warning(
+                f"[Prosody] Using legacy combined z-scores file ({legacy_p}) for "
+                f"{'train+val' if train_lookup is val_lookup else 'a missing split'} — "
+                "train/val cross-contaminated, NOT valid for reported numbers"
+            )
+    return train_lookup, val_lookup, used_legacy

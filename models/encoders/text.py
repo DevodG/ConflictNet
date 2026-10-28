@@ -34,6 +34,9 @@ class DeBERTaEncoder(nn.Module):
         self._lora_r = lora_r
         self._lora_alpha = lora_alpha
         self.encoder = None
+        # Plain attribute (not a Parameter/buffer): intentionally excluded
+        # from state_dict — checkpoints stay tokenizer-free. Used by
+        # scripts/evaluate.py for attribution token decoding.
         self.tokenizer = None
 
         try:

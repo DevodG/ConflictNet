@@ -209,7 +209,7 @@ def generate_conflict_pairs(
     Returns:
         List of conflict sample dicts ready for dataset loading.
     """
-    import torchaudio
+    from .audio_io import read_native, write_wav
 
     if converter is None:
         converter = StarGANv2VoiceConverter()
@@ -221,15 +221,15 @@ def generate_conflict_pairs(
     for i, (wav_path, text) in enumerate(zip(neutral_audio_paths, neutral_texts)):
         try:
             # Load at StarGAN sample rate
-            waveform, sr = torchaudio.load(wav_path)
-            audio_np = waveform.squeeze(0).numpy()
+            waveform, sr = read_native(wav_path)
+            audio_np = waveform.mean(dim=0).numpy()
 
             # Convert emotion
             converted = converter.convert(audio_np, "neutral", target_emotion, sr)
 
             # Save converted audio
             out_path = out_dir / f"synthetic_{i:05d}_{target_emotion}.wav"
-            torchaudio.save(str(out_path), torch.tensor(converted).unsqueeze(0), sr)
+            write_wav(str(out_path), torch.tensor(converted), sr)
 
             samples.append({
                 "wav_path": str(out_path),

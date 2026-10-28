@@ -16,7 +16,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from data.context_cache import ContextCache
 
@@ -97,7 +97,13 @@ class ConflictNetTrainer:
 
         self.global_step = 0
         self.best_val_f1 = 0.0
+        self.best_val_macro_f1 = float("nan")
+        # Checkpoint selection / early stopping metric. Binary weighted-F1
+        # (adaptive threshold) is the default; "val/macro_f1" (fixed 0.5,
+        # real labels only) matches the paper's reported primary metric.
+        self.val_metric = cfg.get("val_metric", "val/f1_weighted")
         self._patience_counter = 0
+        self.history: List[Dict[str, Any]] = []
         self.ctx_cache = ContextCache(
             max_turns=cfg.get("temporal_max_turns", 8),
             device=device,
@@ -250,6 +256,7 @@ class ConflictNetTrainer:
 
     @torch.no_grad()
     def evaluate(self) -> Dict[str, float]:
+        import numpy as np
         from sklearn.metrics import f1_score  # type: ignore
         from models.device_utils import supports_non_blocking
 
@@ -258,6 +265,7 @@ class ConflictNetTrainer:
         # leaking into validation (fixes L3 data leakage path)
         self.ctx_cache.clear()
         all_preds, all_labels = [], []
+        all_probs, all_type_labels, all_real_masks = [], [], []
         non_block = supports_non_blocking(self.device)
 
         for batch in self.val_loader:
@@ -289,7 +297,6 @@ class ConflictNetTrainer:
             if output.conflict_flag is not None:
                 preds = output.conflict_flag.cpu().numpy().astype(int)
             else:
-                import numpy as np
                 preds = np.zeros(batch["audio"].size(0), dtype=int)
             conflict_binary = batch.get("conflict_binary")
             if conflict_binary is None:
@@ -297,9 +304,32 @@ class ConflictNetTrainer:
             labels = conflict_binary.cpu().numpy().astype(int)
             all_preds.extend(preds.tolist())
             all_labels.extend(labels.tolist())
+            if output.probs_type is not None:
+                all_probs.append(output.probs_type.cpu().numpy())
+                all_type_labels.append(batch["conflict_type_labels"].cpu().numpy())
+                real_mask = batch.get("has_real_type_labels")
+                if real_mask is None:
+                    real_mask = torch.zeros(batch["audio"].size(0), dtype=torch.bool)
+                all_real_masks.append(real_mask.cpu().numpy().astype(bool))
 
         f1 = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))  # type: ignore
-        return {"val/f1_weighted": f1}
+        metrics: Dict[str, float] = {"val/f1_weighted": f1}
+        # Subtype macro-F1 at a FIXED 0.5 threshold on real-label samples only.
+        # Tracked alongside the adaptive-threshold binary F1 used for
+        # checkpoint selection so the two can never silently diverge again.
+        if all_probs:
+            from evaluation.metrics import compute_all_metrics
+
+            probs = np.concatenate(all_probs, axis=0)
+            type_labels = np.concatenate(all_type_labels, axis=0)
+            real_mask = np.concatenate(all_real_masks, axis=0)
+            metrics["val/n_real_type"] = float(real_mask.sum())
+            if real_mask.any():
+                subtype = compute_all_metrics(probs[real_mask], type_labels[real_mask])
+                metrics["val/macro_f1"] = float(subtype["macro_f1"])
+            else:
+                metrics["val/macro_f1"] = float("nan")
+        return metrics
 
     def train(
         self,
@@ -327,7 +357,7 @@ class ConflictNetTrainer:
             val_metrics = self.evaluate()
 
             all_metrics = {**train_metrics, **val_metrics, "epoch": epoch + 1}
-            self._log(all_metrics, self.global_step)
+            self._log({k: v for k, v in all_metrics.items() if isinstance(v, (int, float))}, self.global_step)
 
             # Save epoch checkpoint
             # Model weights → safetensors (pickle-free, CWE-502 safe)
@@ -336,18 +366,35 @@ class ConflictNetTrainer:
 
             # Save best checkpoint + early stopping (unified tracker)
             val_f1 = val_metrics.get("val/f1_weighted", 0)
+            val_macro = val_metrics.get("val/macro_f1", float("nan"))
             if val_f1 > self.best_val_f1:
                 self.best_val_f1 = val_f1
+            if val_macro == val_macro and (self.best_val_macro_f1 != self.best_val_macro_f1
+                                           or val_macro > self.best_val_macro_f1):
+                self.best_val_macro_f1 = val_macro
+            select_score = val_metrics.get(self.val_metric, 0)
+            if select_score != select_score:  # NaN (e.g. macro-F1 without real labels)
+                select_score = 0
+            is_best = select_score > getattr(self, "_best_select_score", 0)
+            if is_best:
+                self._best_select_score = select_score
                 self._save_checkpoint(epoch, is_best=True)
                 self._patience_counter = 0
-                logger.info(f"  ✓ New best val F1 = {self.best_val_f1:.4f}")
+                logger.info(f"  ✓ New best {self.val_metric} = {select_score:.4f}")
             else:
                 self._patience_counter += 1
                 if self._patience_counter >= early_stop_patience:
                     logger.info("Early stopping triggered")
+                    self.history.append({**all_metrics, "best": False})
+                    self._write_metrics_json()
                     break
 
-        logger.info(f"Training complete. Best val F1 = {self.best_val_f1:.4f}")
+            self.history.append({**all_metrics, "best": bool(is_best)})
+            self._write_metrics_json()
+
+        logger.info(f"Training complete. Best val F1 = {self.best_val_f1:.4f} "
+                    f"(macro-F1 best = {self.best_val_macro_f1:.4f}, selected on {self.val_metric})")
+        self._write_metrics_json()
 
     @staticmethod
     def _get_git_info() -> Dict[str, str]:
@@ -377,8 +424,6 @@ class ConflictNetTrainer:
 
         prefix = "best_model" if is_best else f"checkpoint_epoch{epoch + 1}"
 
-        _safe_save = getattr(torch, "save")
-
         # 1. Model weights → safetensors (primary, pickle-free)
         try:
             from safetensors.torch import save_file as st_save
@@ -387,7 +432,7 @@ class ConflictNetTrainer:
         except ImportError:
             # Fallback: torch.save model weights only (still state_dict, not full model)
             logger.warning("[Checkpoint] safetensors not installed — falling back to torch.save for model weights")
-            _safe_save(self.model.state_dict(), self.output_dir / f"{prefix}.pt")  # nosec
+            torch.save(self.model.state_dict(), self.output_dir / f"{prefix}.pt")  # nosec S301 - state_dict only
 
         # 2. Training state → .pt (optimizer/scheduler contain non-tensor objects)
         training_state: Dict[str, Any] = {
@@ -396,19 +441,36 @@ class ConflictNetTrainer:
         }
         if self.grad_scaler is not None:
             training_state["grad_scaler_state_dict"] = self.grad_scaler.state_dict()
-        _safe_save(training_state, self.output_dir / f"{prefix}_training_state.pt")  # nosec
+        torch.save(training_state, self.output_dir / f"{prefix}_training_state.pt")  # nosec S301 - own format
 
         # 3. Scalar metadata + experiment config snapshot → JSON
         meta: Dict[str, Any] = {
             "global_step": self.global_step,
             "best_val_f1": self.best_val_f1,
+            "best_val_macro_f1": self.best_val_macro_f1,
+            "val_metric": self.val_metric,
             "epoch": epoch,
+            "retry_attempts": getattr(self, "retry_attempts", 0),
             **self._get_git_info(),
         }
         if self.exp_config is not None:
             meta["experiment_config"] = self.exp_config.to_dict()
         with open(self.output_dir / f"{prefix}_meta.json", "w") as f:
             _json.dump(meta, f, indent=2, default=str)
+
+    def _write_metrics_json(self) -> None:
+        """Write per-epoch metric history (the ``metrics.json`` contract that
+        ``scripts/ablate.py`` and ``scripts/ablation_table.py`` consume)."""
+        import json as _json
+
+        payload = {
+            "val_metric": self.val_metric,
+            "best_val_f1": self.best_val_f1,
+            "best_val_macro_f1": self.best_val_macro_f1,
+            "history": self.history,
+        }
+        with open(self.output_dir / "metrics.json", "w") as f:
+            _json.dump(payload, f, indent=2, default=str)
 
     def load_checkpoint(self, path: str) -> int:
         """Load checkpoint from path and restore model/optimizer/scheduler state.

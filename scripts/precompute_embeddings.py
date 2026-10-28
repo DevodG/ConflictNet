@@ -159,7 +159,7 @@ def main():
         all_severity[start:start+B] = batch["severity"]
         all_binary[start:start+B] = batch["conflict_binary"]
         all_has_real_type[start:start+B] = batch.get("has_real_type_labels", torch.zeros(B, dtype=torch.bool))
-        all_ids.extend(batch.get("utterance_id", [f"idx_{i}" for i in range(start, start+B)]))
+        all_ids.extend(batch.get("utterance_ids", [f"idx_{i}" for i in range(start, start+B)]))
         all_speaker_ids.extend(batch.get("speaker_ids", [f"spk_{i}" for i in range(start, start+B)]))
         start += B
 

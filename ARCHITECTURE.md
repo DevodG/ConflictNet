@@ -183,7 +183,7 @@ flowchart TB
         CLF_MLP["Shared MLP<br/>Linear 264→512 → GELU → LN → Drop<br/>Linear 512→256 → GELU → LN → Drop"]
         CLF_TYPE["Multi-Label Sigmoid<br/>(B, 3) · sarcasm · suppression · deception"]
         CLF_SEV["Severity Regression<br/>Linear 256→1 → Sigmoid<br/>(B, 1) in [0, 1]"]
-        CLF_THRESH["Speaker-Adaptive Threshold ⭐<br/>MLP(spk_feat) → [0, 0.3]<br/>base_threshold + offset"]
+        CLF_THRESH["Speaker-Adaptive Threshold ⭐<br/>MLP(spk_feat) → [-0.3, +0.3]<br/>base_threshold + offset"]
         CLF_FLAG["Conflict Flag<br/>any(probs > effective_threshold)"]
         TM_OUT --> CLF_IN
         WD_AGG --> CLF_IN
@@ -201,7 +201,7 @@ flowchart TB
         LS_BCE["Multi-Label BCE<br/>per-type binary cross-entropy"]
         LS_MSE["Severity MSE<br/>regression in [0, 1]"]
         LS_SWAP["Swap Detection ⭐<br/>BCE · matched(0) vs swapped(1)"]
-        LS_MTL["Multi-Task Uncertainty ⭐<br/>L_total = Σ(1/σ²_i)L_i + log σ_i<br/>4 tasks during pre-train<br/>3 tasks during fine-tune"]
+        LS_MTL["Multi-Task Uncertainty ⭐<br/>L_total = Σ(exp(-s_i)L_i + s_i), s_i=log σ²_i<br/>contrastive+swap during pre-train<br/>+type/severity/separation during fine-tune"]
     end
 
     subgraph Training["10. Training Phases"]
@@ -312,8 +312,8 @@ Three backends via factory `build_audio_encoder()`:
 
 | Backend | Model ID | Output Dim | Frozen | Fallback |
 |---------|----------|------------|--------|----------|
-| **Emotion2Vec+** (default) | `iic/emotion2vec_plus_large` via funasr | 768 | Yes | WavLM-large if funasr unavailable |
-| **WavLM** | `microsoft/wavlm-large` | 1024 | Yes | — |
+| **Emotion2Vec+** (default) | `iic/emotion2vec_plus_large` via funasr | 768 | Yes | WavLM base-plus if funasr unavailable |
+| **WavLM** | `microsoft/wavlm-base-plus` | 768 | Yes | — |
 | **wav2vec2** | `facebook/wav2vec2-large-960h` | 1024 | Yes | — |
 
 **Emotion2Vec+ specifics:**
@@ -337,11 +337,11 @@ nn.Sequential(
 | Property | Value |
 |----------|-------|
 | **Model** | `microsoft/deberta-v3-large` (Roberta-style disentangled attention) |
-| **Parameters** | 390M total (304M in encoder, 86M in embedding) |
+| **Parameters** | ~435M total |
 | **Hidden size** | 1024 |
 | **Layers** | 24 transformer layers |
 | **Fine-tuning** | LoRA (rank r=16, alpha=32) targeting `query_proj` + `value_proj` |
-| **Trainable** | ~0.13% of encoder parameters (~0.5M) |
+| **Trainable** | ~0.1% of encoder parameters (~0.5M LoRA) |
 | **Pooling** | [CLS] token (first position) |
 
 **LoRA configuration:**
@@ -667,7 +667,7 @@ class SpeakerAdaptiveThreshold(nn.Module):
         )
 
     def forward(self, speaker_feat):
-        offset = sigmoid(MLP(speaker_feat)) * max_offset  # [0, 0.3]
+        offset = tanh(MLP(speaker_feat)) * max_offset  # [-0.3, +0.3], zero-centred
         # effective_threshold = base_threshold (0.5) + offset
 ```
 
@@ -732,8 +732,8 @@ A novel extension of InfoNCE with two modifications:
 
 **Context-Adaptive Temperature:**
 ```python
-tau = exp(log_tau + Δτ(context_pooled))   # per-batch effective temperature
-Δτ = MLP(pooled_dialogue_context)          # learns to soften/sharpen τ
+tau_i = exp(log_tau + Δτ_i(context_pooled))   # per-sample effective temperature
+Δτ = MLP(pooled_dialogue_context)                # learns to soften/sharpen τ
 ```
 
 - Ambiguous dialogue context → higher τ → softer contrastive objective
@@ -794,7 +794,7 @@ class MultiTaskLoss(nn.Module):
         self.log_vars = nn.Parameter(torch.zeros(n_tasks))   # learnable
 
     def forward(self, losses):
-        total = Σ (exp(-log σ²_i) × L_i + log σ_i)
+        total = Σ (exp(-s_i) × L_i + s_i)   # s_i = log σ²_i; missing terms contribute nothing
         # No manual weighting needed — σ_i adapts during training
 ```
 
@@ -1023,14 +1023,14 @@ RUN apt-get update && apt-get install -y libsndfile1 ffmpeg
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . /app
-CMD ["uvicorn", "serve.run:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "serve.run"]
 ```
 
 ---
 
 ## 15. Ablation Configurations
 
-All 7 ablation variants as Hydra YAML overrides in `configs/`:
+All 7 ablation variants as YAML configs in `configs/` (applied via `scripts/train.py --config`, explicit CLI flags override):
 
 ### 15.1 Default Configuration (`configs/default.yaml`)
 
@@ -1146,7 +1146,7 @@ val   = IEMOCAPDataset(root, sessions=[5])              # 1 session held out
 | Component | Total Parameters | Trainable Parameters | Frozen |
 |-----------|:----------------:|:--------------------:|:------:|
 | Audio Encoder (Emotion2Vec+) | ~317M | 0 | ✅ |
-| Text Encoder (DeBERTa-v3-Large) | ~390M | ~0.5M (LoRA) | Partial |
+| Text Encoder (DeBERTa-v3-Large) | ~435M | ~0.5M (LoRA) | Partial |
 | Audio ProjectionHead | ~393K | ~393K | |
 | Text ProjectionHead | ~524K | ~524K | |
 | Speaker Normaliser (ECAPA) | ~6M (frozen) | ~0 | ✅ |

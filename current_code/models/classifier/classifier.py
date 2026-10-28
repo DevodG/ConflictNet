@@ -45,7 +45,8 @@ class SpeakerAdaptiveThreshold(nn.Module):
 
     Args:
         embed_dim: Speaker feature dimension.
-        max_offset: Maximum threshold offset (default 0.3).
+        max_offset: Maximum absolute threshold offset (default 0.3), i.e.
+            the offset range is ``[-max_offset, +max_offset]``.
     """
 
     def __init__(self, embed_dim: int = 256, max_offset: float = 0.3):
@@ -58,7 +59,11 @@ class SpeakerAdaptiveThreshold(nn.Module):
         )
 
     def forward(self, speaker_feat: torch.Tensor) -> torch.Tensor:
-        """Return per-sample offset in [0, max_offset].
+        """Return per-sample offset in [-max_offset, +max_offset].
+
+        Zero-centred (tanh): initialised near 0 so the effective threshold
+        starts at the global base and learns speaker-specific deviations in
+        both directions.
 
         Args:
             speaker_feat: (B, embed_dim) speaker representation.
@@ -66,7 +71,7 @@ class SpeakerAdaptiveThreshold(nn.Module):
         Returns:
             (B,) per-sample threshold offsets.
         """
-        offset = torch.sigmoid(self.net(speaker_feat)).squeeze(-1)
+        offset = torch.tanh(self.net(speaker_feat)).squeeze(-1)
         return offset * self.max_offset
 
 

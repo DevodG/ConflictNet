@@ -148,35 +148,54 @@ def parse_textgrid(textgrid_path: str) -> List[Dict[str, Any]]:
 
 
 def _parse_textgrid_fallback(textgrid_path: str) -> List[Dict[str, Any]]:
-    """Basic TextGrid parser — handles the standard word-tier format."""
-    words = []
+    """Minimal TextGrid parser for the standard word-tier format.
+
+    Parses each ``intervals [N]:`` block as a unit (xmin, xmax, text in any
+    order) instead of relying on fragile cross-line ordering, and only
+    inside a tier whose name contains "word".
+    """
+    import re
+
+    words: List[Dict[str, Any]] = []
     with open(textgrid_path) as f:
-        lines = f.readlines()
+        lines = [ln.strip() for ln in f]
 
     in_word_tier = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.lower().startswith("name"):
-            if "word" in stripped.lower():
-                in_word_tier = True
-            else:
-                in_word_tier = False
-        if in_word_tier and stripped.startswith("intervals ["):
-            in_word_tier = True
-        if in_word_tier and "text =" in stripped:
-            text = stripped.split("=", 1)[1].strip().strip('"')
-            if text:
-                words.append({"word": text, "start": 0.0, "end": 0.0})
-        if in_word_tier and "xmin =" in stripped and words:
-            val = float(stripped.split("=", 1)[1].strip())
-            if words[-1]["start"] == 0.0:
-                words[-1]["start"] = val
-        if in_word_tier and "xmax =" in stripped and words:
-            val = float(stripped.split("=", 1)[1].strip())
-            if words[-1]["end"] == 0.0:
-                words[-1]["end"] = val
+    current: Dict[str, Any] = {}
+    interval_re = re.compile(r"intervals\s*\[\d+\s*\]:")
 
-    return words
+    def _flush() -> None:
+        if current.get("text"):
+            try:
+                words.append({
+                    "word": current["text"],
+                    "start": round(float(current.get("xmin", 0.0)), 3),
+                    "end": round(float(current.get("xmax", 0.0)), 3),
+                })
+            except (TypeError, ValueError):
+                pass
+
+    for stripped in lines:
+        low = stripped.lower()
+        if low.startswith("name ="):
+            _flush()
+            current = {}
+            in_word_tier = "word" in low
+            continue
+        if not in_word_tier:
+            continue
+        if interval_re.match(stripped):
+            _flush()
+            current = {}
+            continue
+        if low.startswith("xmin ="):
+            current["xmin"] = stripped.split("=", 1)[1].strip()
+        elif low.startswith("xmax ="):
+            current["xmax"] = stripped.split("=", 1)[1].strip()
+        elif low.startswith("text ="):
+            current["text"] = stripped.split("=", 1)[1].strip().strip('"').strip()
+    _flush()
+    return [w for w in words if w["word"]]
 
 
 def build_manifest(align_out: str, corpus_dir: str, output_dir: str) -> str:

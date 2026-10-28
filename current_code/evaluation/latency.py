@@ -35,16 +35,24 @@ def benchmark_latency(
             model(**batch)
         latencies.append((time.perf_counter() - start) * 1000)  # ms
 
+    import math
+    import statistics
+
     latencies = sorted(latencies)
-    avg_ms = sum(latencies) / len(latencies)
-    std_ms = (sum((lat - avg_ms) ** 2 for lat in latencies) / len(latencies)) ** 0.5
+    avg_ms = statistics.fmean(latencies)
+    std_ms = statistics.stdev(latencies) if len(latencies) > 1 else 0.0
     batch_size = dummy_batch["audio"].size(0)
+
+    def _percentile(p: float) -> float:
+        # Nearest-rank: rank = ceil(p/100 * N), 1-indexed.
+        rank = min(max(math.ceil(p / 100 * len(latencies)), 1), len(latencies))
+        return latencies[rank - 1]
 
     return {
         "avg_ms": round(avg_ms, 2),
         "std_ms": round(std_ms, 2),
-        "p95_ms": round(latencies[int(0.95 * len(latencies))], 2),
-        "p99_ms": round(latencies[int(0.99 * len(latencies))], 2),
+        "p95_ms": round(_percentile(95), 2),
+        "p99_ms": round(_percentile(99), 2),
         "throughput": round(batch_size / (avg_ms / 1000), 1),
         "batch_size": batch_size,
         "n_iters": n_iters,

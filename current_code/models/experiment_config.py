@@ -34,6 +34,7 @@ class ExperimentConfig:
     epochs: int = 30
     pretrain_epochs: int = 5
     batch_size: int = 16
+    val_metric: str = "val/f1_weighted"
     lr: float = 2e-5
     warmup_steps: int = 500
     gradient_accumulation_steps: int = 1

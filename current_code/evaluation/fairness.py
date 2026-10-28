@@ -63,10 +63,21 @@ def fairness_audit(
             y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
         )
 
+        def _as_float(value: Any, key: str = "f1") -> float:
+            # fairlearn returns Series or DataFrame depending on version and
+            # metric count — normalise to a scalar either way.
+            if hasattr(value, "get") and not hasattr(value, "iloc"):
+                value = value.get(key, value)
+            if hasattr(value, "iloc"):
+                value = value.iloc[0] if len(value) > 0 else float("nan")
+            return float(value)
+
         by_group_raw = mf.by_group.to_dict()
         by_group = by_group_raw.get("f1", by_group_raw)
-        overall = float(mf.overall["f1"])  # type: ignore[arg-type]
-        disparity = float(mf.difference()["f1"])  # type: ignore[arg-type]
+        if not isinstance(by_group, dict):
+            by_group = {"overall": float(by_group)}
+        overall = _as_float(mf.overall)
+        disparity = _as_float(mf.difference())
 
         return {
             "overall_f1": overall,

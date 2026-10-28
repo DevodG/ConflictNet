@@ -42,6 +42,8 @@ def parse_args():
     p.add_argument("--case_root", type=str, default=None)
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
+    p.add_argument("--cremad_root", type=str, default=None)
+    p.add_argument("--meld_root", type=str, default=None)
     p.add_argument("--held_out_speakers", type=str, required=True,
                    help="Comma-separated list of held-out speaker IDs")
     p.add_argument("--seen_speakers", type=str, default=None,
@@ -49,6 +51,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output_dir", type=str, default="ood_results")
+    p.add_argument("--prosody_stats", type=str, default=None,
+                   help="Path to prosody stats JSON (VAL split z-scores are used)")
     return p.parse_args()
 
 
@@ -94,8 +98,16 @@ def main():
     logger.info(f"[OOD-Probe] Loaded checkpoint from {args.checkpoint}")
 
     # --- Build dataset ---
-    from data.datasets import IEMOCAPDataset, MUStARDDataset, CASEDataset
-    from data.datasets import conflictnet_collate_fn
+    from data.datasets import IEMOCAPDataset, MUStARDDataset, CASEDataset, CREMADDataset, MELDDataset
+    from data.datasets import conflictnet_collate_fn, load_prosody_lookups, make_collate_fn
+
+    collate_fn = conflictnet_collate_fn
+    if args.prosody_stats:
+        _, val_lookup, used_legacy = load_prosody_lookups(args.prosody_stats)
+        if used_legacy:
+            logger.warning("[OOD-Probe] REFUSING legacy combined z-scores for reported metrics")
+        elif val_lookup is not None:
+            collate_fn = make_collate_fn(prosody_lookup=val_lookup)
 
     datasets = []
     if args.iemocap_root:
@@ -110,9 +122,17 @@ def main():
         ds = _build_dataset(args.case_root, CASEDataset, split="val")
         if ds:
             datasets.append(ds)
+    if args.cremad_root:
+        ds = _build_dataset(args.cremad_root, CREMADDataset, split="val")
+        if ds:
+            datasets.append(ds)
+    if args.meld_root:
+        ds = _build_dataset(args.meld_root, MELDDataset, split="val")
+        if ds:
+            datasets.append(ds)
 
     if not datasets:
-        raise ValueError("No datasets could be loaded. Provide at least one of --case_root, --iemocap_root, --mustard_root")
+        raise ValueError("No datasets could be loaded. Provide at least one dataset root")
 
     full_dataset = ConcatDataset(datasets)
     logger.info(f"[OOD-Probe] Full dataset: {len(full_dataset)} samples")
@@ -136,7 +156,7 @@ def main():
     pin = supports_pin_memory(device.type)
     held_out_loader = DataLoader(
         held_out_set, batch_size=args.batch_size, shuffle=False,
-        num_workers=2, pin_memory=pin, collate_fn=conflictnet_collate_fn,
+        num_workers=2, pin_memory=pin, collate_fn=collate_fn,
     )
 
     # --- Per-speaker tracking ---
@@ -194,7 +214,7 @@ def main():
     if seen_set:
         seen_loader = DataLoader(
             seen_set, batch_size=args.batch_size, shuffle=False,
-            num_workers=2, pin_memory=pin, collate_fn=conflictnet_collate_fn,
+            num_workers=2, pin_memory=pin, collate_fn=collate_fn,
         )
         seen_probs, seen_labels, seen_real_masks = [], [], []
         with torch.no_grad():

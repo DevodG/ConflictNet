@@ -93,10 +93,17 @@ def main():
 
     # Check for existing checkpoint
     start = 0
-    all_audio, all_text, all_speaker, all_labels, all_severity, all_binary, all_ids = None, None, None, None, None, None, None
+    all_audio, all_text, all_speaker, all_labels, all_severity, all_binary = None, None, None, None, None, None
+    all_ids, all_speakers, all_real = None, None, None
     if ckpt_path.exists():
         logger.info(f"Existing checkpoint found: {ckpt_path}, resuming...")
         data = torch.load(ckpt_path, weights_only=True)
+        if "speaker_ids" not in data or "has_real_type_labels" not in data:
+            raise ValueError(
+                f"{ckpt_path} predates speaker_ids/has_real_type_labels tracking — "
+                "delete it and rerun (resuming would silently break the "
+                "speaker-stratified cached split)"
+            )
         start = len(data["utterance_ids"])
         all_audio = data["audio_embed"]
         all_text = data["text_embed"]
@@ -105,6 +112,8 @@ def main():
         all_severity = data["severity"]
         all_binary = data["conflict_binary"]
         all_ids = list(data["utterance_ids"])
+        all_speakers = list(data["speaker_ids"])
+        all_real = list(data["has_real_type_labels"])
         logger.info(f"Resumed with {start} samples already processed")
 
     # Skip past already-processed batches
@@ -128,6 +137,8 @@ def main():
         all_severity = torch.zeros(N, 1)
         all_binary = torch.zeros(N)
         all_ids = []
+        all_speakers = []
+        all_real = []
 
     # Process remaining batches
     batches_since_ckpt = 0
@@ -156,7 +167,10 @@ def main():
         all_labels[idx:idx+B] = batch["conflict_type_labels"]
         all_severity[idx:idx+B] = batch["severity"]
         all_binary[idx:idx+B] = batch["conflict_binary"]
-        all_ids.extend(batch.get("utterance_id", [f"idx_{j}" for j in range(idx, idx+B)]))
+        all_ids.extend(batch.get("utterance_ids", [f"idx_{j}" for j in range(idx, idx+B)]))
+        all_speakers.extend(batch.get("speaker_ids", [f"spk_{j}" for j in range(idx, idx+B)]))
+        real_mask = batch.get("has_real_type_labels", torch.zeros(B, dtype=torch.bool))
+        all_real.extend(bool(x) for x in real_mask.tolist())
 
         batches_since_ckpt += 1
         if (i + 1) % 10 == 0:
@@ -164,16 +178,16 @@ def main():
 
         if batches_since_ckpt >= args.chunk_size:
             _save(ckpt_path, all_audio, all_text, all_speaker, all_labels,
-                  all_severity, all_binary, all_ids, N)
+                  all_severity, all_binary, all_ids, all_speakers, all_real, N)
             logger.info(f"  checkpoint saved ({idx+B}/{N})")
             batches_since_ckpt = 0
 
     _save(ckpt_path, all_audio, all_text, all_speaker, all_labels,
-          all_severity, all_binary, all_ids, N)
+          all_severity, all_binary, all_ids, all_speakers, all_real, N)
     logger.info(f"Done! All {N} embeddings saved to {ckpt_path}")
 
 
-def _save(path, audio, text, speaker, labels, severity, binary, ids, N):
+def _save(path, audio, text, speaker, labels, severity, binary, ids, speakers, real, N):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
@@ -184,6 +198,8 @@ def _save(path, audio, text, speaker, labels, severity, binary, ids, N):
         "severity": severity,
         "conflict_binary": binary,
         "utterance_ids": ids,
+        "speaker_ids": speakers,
+        "has_real_type_labels": real,
         "num_samples": N,
         "embed_dim": 256,
         "audio_encoder": "wavlm",

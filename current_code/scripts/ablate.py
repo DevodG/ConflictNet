@@ -33,10 +33,17 @@ def parse_args():
 
 
 def collect_metrics(results: dict) -> dict:
-    """Extract summary metrics from a run's output."""
+    """Extract summary metrics from a run's output.
+
+    Understands both the ``scripts/evaluate.py`` schema (``macro_f1`` /
+    ``binary_f1`` / ``severity_mae``) and the trainer history schema
+    (``best_val_macro_f1`` / ``best_val_f1``).
+    """
+    macro = results.get("macro_f1", results.get("best_val_macro_f1", 0.0))
+    binary = results.get("binary_f1", results.get("best_val_f1", 0.0))
     return {
-        "macro_f1": results.get("macro_f1", 0.0),
-        "binary_f1": results.get("binary_f1", 0.0),
+        "macro_f1": 0.0 if macro != macro else macro,  # NaN-safe
+        "binary_f1": 0.0 if binary != binary else binary,
         "severity_mae": results.get("severity_mae", float("inf")),
     }
 

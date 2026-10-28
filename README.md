@@ -2,7 +2,7 @@
 
 **Speaker-normalised cross-modal emotion conflict detection** with temporal context, interpretability, and multi-label subtype classification.
 
-> Built on top of HuBERT-CLAP. ~70% reused from existing libraries; ~1,400 lines of novel code.
+> Original implementation (~2,100 lines of novel modelling code) following the HuBERT-CLAP projection-head *pattern* (Nguyen et al., 2024) — no HuBERT-CLAP weights or code are reused.
 
 ---
 
@@ -68,9 +68,14 @@ pytest tests/ -v
 ```
 conflictnet/
 ├── configs/
-│   └── default.yaml            # Hydra config: all hyperparameters
+│   ├── default.yaml            # YAML config (train.py --config)
+│   ├── fast_training.yaml      # Reduced-cost preset
+│   └── ablate_*.yaml           # 7 ablation configs
 ├── data/
-│   ├── datasets.py             # IEMOCAP + MUStARD++ loaders + collate_fn
+│   ├── datasets.py             # 7 dataset loaders + collate_fn + z-score lookups
+│   ├── audio_io.py             # Backend-free waveform IO (soundfile)
+│   ├── cached_dataset.py       # Pre-computed embedding dataset
+│   ├── augmentation.py         # MUSAN noise / SpecAugment
 │   └── synthetic.py            # StarGANv2-VC conflict pair generation
 ├── models/
 │   ├── encoders/
@@ -85,21 +90,40 @@ conflictnet/
 │   │   └── word_divergence.py  # MFA word-level divergence features ⭐
 │   ├── classifier/
 │   │   └── classifier.py       # Multi-label subtype + severity head ⭐
-│   └── conflictnet.py          # Full model assembly + MultiTaskLoss + SwapObjective
+│   ├── conflictnet.py          # Full model assembly + MultiTaskLoss + SwapObjective
+│   ├── cached_conflictnet.py   # Cached-embedding fast path
+│   ├── checkpoint_utils.py     # safetensors IO + full-config restore
+│   ├── experiment_config.py    # Structured run config
+│   └── device_utils.py         # CUDA/MPS/CPU resolution
 ├── training/
-│   ├── trainer.py              # Training loop + warmup cosine scheduler + WandB
+│   ├── trainer.py              # Training loop + scheduler + metrics.json + WandB
 │   └── curriculum.py           # CurriculumSampler ⭐
 ├── evaluation/
 │   ├── metrics.py              # WAcc, macro-F1, per-type AP/AUC, severity MAE
 │   ├── fairness.py             # FairLearn demographic parity + equalized odds
 │   ├── attribution.py          # Captum integrated gradients (text + audio)
-│   └── llm_baseline.py         # GPT-4o text-only ceiling
+│   ├── calibration.py          # Threshold tuning + ECE + reliability diagrams
+│   ├── llm_baseline.py         # GPT-4o text-only ceiling
+│   ├── human_eval.py           # Annotator agreement (kappa)
+│   ├── latency.py              # Latency benchmarking
+│   └── ood_probe.py            # Held-out-speaker OOD evaluation
 ├── scripts/
-│   ├── train.py                # CLI: train
-│   ├── evaluate.py             # CLI: evaluate
-│   └── generate_synthetic.py  # CLI: StarGANv2-VC data generation
+│   ├── train.py / evaluate.py / benchmark.py / ensemble.py
+│   ├── stats.py                # Bootstrap CIs + significance tests
+│   ├── eval_cremad.py          # CREMA-D binary-only eval
+│   ├── ablate.py               # Ablation runner
+│   ├── compute_prosody_stats.py / compute_difficulties.py
+│   ├── precompute_embeddings.py / precompute_incremental.py
+│   ├── run_mfa_alignment.py / download_datasets.py / export_onnx.py
+│   └── generate_synthetic.py / preprocess_all.py
+├── serve/                      # FastAPI inference (REST + /ws streaming)
+├── paper/                      # Paper drafts + verified references (06)
 ├── tests/
-│   └── test_components.py      # Unit tests (all components, no GPU required)
+│   ├── test_components.py      # Unit tests (all components, no GPU required)
+│   ├── test_evaluation.py      # Eval + fairness + calibration tests
+│   ├── test_serve.py           # Serving tests
+│   └── test_integrity.py       # Regression tests for audit fixes
+├── lightning_train.py          # Lightning AI remote launcher (env-configured)
 └── requirements.txt
 ```
 
@@ -107,19 +131,19 @@ conflictnet/
 
 ---
 
-## Novel Components (~1,400 lines)
+## Novel Components (~2,100 lines)
 
 | Component | File | Lines | Novelty |
 |-----------|------|-------|---------|
-| Speaker normalization + cold-start | `models/speaker_norm/speaker_norm.py` | ~230 | ⭐ Novel |
-| Transformer temporal context | `models/temporal/temporal.py` | ~130 | ⭐ Novel |
-| Context-gated contrastive loss | `models/alignment/alignment.py` | ~110 | ⭐ Novel |
-| Multi-label classifier + severity | `models/classifier/classifier.py` | ~90 | ⭐ Novel |
-| Word-level divergence (MFA) | `models/alignment/word_divergence.py` | ~155 | ⭐ Novel |
+| Speaker normalization + cold-start | `models/speaker_norm/speaker_norm.py` | ~470 | ⭐ Novel |
+| Transformer temporal context | `models/temporal/temporal.py` | ~160 | ⭐ Novel |
+| Context-gated contrastive loss | `models/alignment/alignment.py` | ~250 | ⭐ Novel |
+| Multi-label classifier + severity | `models/classifier/classifier.py` | ~220 | ⭐ Novel |
+| Word-level divergence (MFA) | `models/alignment/word_divergence.py` | ~300 | ⭐ Novel |
 | Self-supervised swap objective | `models/conflictnet.py` | ~50 | ⭐ Novel |
-| Curriculum sampler | `training/curriculum.py` | ~60 | Semi-novel |
+| Curriculum sampler | `training/curriculum.py` | ~75 | Semi-novel |
 | Multi-task uncertainty loss | `models/conflictnet.py` | ~30 | Impl. |
-| Full model assembly + forward | `models/conflictnet.py` | ~200 | Engineering |
+| Full model assembly + forward | `models/conflictnet.py` | ~550 | Engineering |
 
 ---
 
@@ -141,7 +165,7 @@ conflictnet/
 
 | Week | Milestone |
 |------|-----------|
-| 1 | Fork HuBERT-CLAP → reproduce baseline → swap DistilBERT→DeBERTa |
+| 1 | Implement encoder stack (DeBERTa-v3 + audio backbones, HuBERT-CLAP-style projection pattern) |
 | 2 | Swap wav2vec2→Emotion2Vec → compare all 3 audio encoders |
 | 3 | Add ECAPA-TDNN speaker norm → z-score pipeline |
 | 4 | Build Transformer temporal context → integrate |
@@ -158,13 +182,14 @@ conflictnet/
 
 ## Dependencies
 
+See `requirements.txt` (single source of truth):
+
 ```
-torch>=2.1            transformers>=4.36    peft>=0.7
-speechbrain>=1.0      captum>=0.7           fairlearn>=0.9
-librosa>=0.10         praat-parselmouth>=0.4 torchaudio>=2.1
-scikit-learn>=1.3     hydra-core>=1.3       wandb
-audiomentations>=0.34 evaluate              datasets>=2.16
-safetensors>=0.4      funasr  # optional
+torch>=2.1  torchaudio>=2.1  transformers>=4.36 (+sentencepiece)  peft>=0.7
+speechbrain  captum  fairlearn  librosa  soundfile  praat-parselmouth
+scikit-learn  scipy  pyyaml  pandas  matplotlib  wandb  audiomentations
+safetensors  pytest  ruff  fastapi/uvicorn/pydantic  onnx (optional)
+funasr  # optional, Emotion2Vec backend
 # Via conda: montreal-forced-aligner
 # Via git clone: github.com/yl4579/StarGANv2-VC
 ```

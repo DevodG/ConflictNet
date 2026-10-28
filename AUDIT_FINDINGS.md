@@ -3,6 +3,26 @@
 > Comprehensive code audit conducted on `main`.  
 > All claims verified against source code at the line numbers shown.
 
+> **FIX STATUS (2026-10-29):** every item below is now resolved in the
+> working tree unless marked otherwise. See `tests/test_integrity.py` for
+> regression coverage. Residuals: (1) deception still has zero positive
+> labels repo-wide — CASE annotation pending; (2) severity trains nowhere —
+> annotated data pending; (3) no full training run has completed, so all
+> paper numbers remain placeholders; (4) legacy `prosody_stats.zscores.json`
+> is retained for back-compat but every eval entry point now refuses it for
+> reported metrics; (5) `current_code/*.py` flat root copies are stale
+> snapshots (nothing imports them); the `current_code/<pkg>/` twins are
+> re-synced. Per-item ledger:
+> F1 FIXED · F2 FIXED (NaN + masked MSE) · F3 MITIGATED (proxy masked by
+> `has_real_type_labels`; fail-closed fallback) · L1 FIXED · L2 FIXED
+> (central `load_prosody_lookups`) · L3 FIXED · L4 FIXED · L5 FIXED ·
+> B1 FIXED (`load_conflictnet_model` everywhere) · B2 FIXED · B3 FIXED ·
+> B4 FIXED · Q1 DOCUMENTED (non-issue: plain attr, state_dict-clean) ·
+> Q2 FIXED (dim guard) · Q3 FIXED · Q4 FIXED (state-machine parser + test) ·
+> Q5 HARDENED · Q6 FIXED (nearest-rank) · Q7 FIXED (via helper) · Q8 FIXED
+> (refuse legacy) · Q9 FIXED (VAL lookup via `--prosody_stats`) ·
+> Q10 ALREADY-FIXED.
+
 ---
 
 ## CRITICAL: Data Integrity Issues

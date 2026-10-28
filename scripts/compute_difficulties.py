@@ -77,20 +77,15 @@ def main():
 
     logger.info(f"Computing difficulties for {len(train_set)} samples")
 
-    # Build model
+    # Build model (architecture restored from checkpoint meta, not defaults)
+    from models.checkpoint_utils import load_conflictnet_model
     from models.conflictnet import ConflictNet
 
-    model = ConflictNet()
     if args.checkpoint:
-        from models.checkpoint_utils import load_checkpoint_state
-        state = load_checkpoint_state(args.checkpoint, device=args.device)
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        if missing:
-            logger.warning(f"Missing keys: {missing}")
-        if unexpected:
-            logger.warning(f"Unexpected keys: {unexpected}")
+        model, _ = load_conflictnet_model(args.checkpoint, device=args.device)
         logger.info(f"[Difficulties] Loaded checkpoint: {args.checkpoint}")
     else:
+        model = ConflictNet()
         logger.info("[Difficulties] No checkpoint — using random init")
 
     model.to(args.device)

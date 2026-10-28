@@ -23,14 +23,13 @@ Usage::
 
 from __future__ import annotations
 
-import dataclasses
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 
-from .alignment import ProjectionHead, ContextGatedContrastiveLoss, CrossModalAttention
+from .alignment import ContextGatedContrastiveLoss, CrossModalAttention
 from .alignment.word_divergence import WordLevelDivergence
 from .classifier import ConflictClassifier
 from .conflictnet import ConflictNetOutput, MultiTaskLoss, SwapPretrainingObjective, focal_loss_with_logits

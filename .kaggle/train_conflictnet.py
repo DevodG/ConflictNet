@@ -151,8 +151,10 @@ def setup_data():
     # MUStARD++ audio unavailable — CREMA-D only
     logger.info("MUStARD++ audio unavailable — training on CREMA-D only")
 
-    # Copy prosody stats
-    for fname in ["prosody_stats.json", "prosody_stats.zscores.json"]:
+    # Copy prosody stats — prefer split train/val z-scores (leak-free);
+    # fall back to the legacy combined file only when splits are absent.
+    for fname in ["prosody_stats.json", "prosody_stats.train.zscores.json",
+                  "prosody_stats.val.zscores.json", "prosody_stats.zscores.json"]:
         src = code_dir / fname
         if src.exists():
             (WORK_DIR / fname).symlink_to(src.resolve())

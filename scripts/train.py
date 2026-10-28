@@ -31,8 +31,74 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+def _apply_yaml_config(p: argparse.ArgumentParser, argv) -> None:
+    """Apply ``--config configs/*.yaml`` values as parser defaults.
+
+    Explicit CLI flags always win: YAML only fills in parser defaults, and
+    the final parse applies CLI overrides on top.
+    """
+    pre, _ = p.parse_known_args(argv)
+    config_path = getattr(pre, "config", None)
+    if not config_path:
+        return
+    try:
+        import yaml
+    except ImportError:
+        raise RuntimeError("pip install pyyaml to use --config")
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    def _get(*keys, default=None):
+        node = cfg
+        for key in keys:
+            if not isinstance(node, dict) or key not in node:
+                return default
+            node = node[key]
+        return node
+
+    defaults: dict = {}
+    simple = {
+        "audio_encoder": _get("audio_encoder"),
+        "embed_dim": _get("embed_dim"),
+        "lora_r": _get("training", "lora", "r"),
+        "batch_size": _get("training", "batch_size"),
+        "lr": _get("training", "lr"),
+        "epochs": _get("training", "epochs"),
+        "pretrain_epochs": _get("training", "pretrain_epochs"),
+        "warmup_steps": _get("training", "warmup_steps"),
+        "gradient_accumulation_steps": _get("training", "gradient_accumulation_steps"),
+        "early_stop_patience": _get("training", "early_stop_patience"),
+        "focal_loss_gamma": _get("training", "focal_loss_gamma"),
+        "label_smoothing": _get("training", "label_smoothing"),
+        "separation_lambda": _get("classifier", "separation_lambda"),
+        "temporal_max_turns": _get("temporal", "n_turns"),
+        "curriculum_warmup_epochs": _get("training", "curriculum", "warmup_epochs"),
+    }
+    for key, val in simple.items():
+        if val is not None:
+            defaults[key] = val
+    # Inverted booleans: YAML `enabled: true` == CLI `--no_*` absent.
+    inversions = {
+        "no_speaker_norm": _get("speaker_norm", "enabled"),
+        "no_temporal": _get("temporal", "enabled"),
+        "no_cross_attn_injection": _get("cross_attn", "enabled"),
+        "no_baseline_subtract": _get("baseline_subtract", "enabled"),
+        "no_speaker_adaptive_threshold": _get("speaker_adaptive_threshold", "enabled"),
+    }
+    for flag, enabled in inversions.items():
+        if enabled is not None:
+            defaults[flag] = not enabled
+    if _get("training", "curriculum", "enabled") is True:
+        defaults["curriculum"] = True
+    if defaults:
+        p.set_defaults(**defaults)
+        logger.info(f"[Config] Applied {len(defaults)} defaults from {config_path}")
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Train ConflictNet v2")
+    p.add_argument("--config", type=str, default=None,
+                   help="YAML config file (configs/default.yaml); explicit CLI flags override it")
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
     p.add_argument("--cremad_root", type=str, default=None, help="CREMA-D dataset root")
@@ -97,7 +163,19 @@ def parse_args(argv=None):
                    help="Train on pre-computed encoder embeddings (bypass WavLM + DeBERTa)")
     p.add_argument("--cache_path", type=str, default="cached_embeddings/embeddings.pt",
                    help="Path to pre-computed embeddings .pt file")
-    return p.parse_args()
+    p.add_argument("--temporal_max_turns", type=int, default=16,
+                   help="Max dialogue turns in temporal context window")
+    p.add_argument("--val_metric", type=str, default="val/f1_weighted",
+                   choices=["val/f1_weighted", "val/macro_f1"],
+                   help="Checkpoint selection / early-stopping metric")
+    p.add_argument("--curriculum", action="store_true",
+                   help="Enable curriculum sampling (requires --difficulties)")
+    p.add_argument("--difficulties", type=str, default=None,
+                   help="JSON difficulty scores from scripts/compute_difficulties.py")
+    p.add_argument("--curriculum_warmup_epochs", type=int, default=5,
+                   help="Curriculum warmup epochs (easy-only phase)")
+    _apply_yaml_config(p, argv)
+    return p.parse_args(argv)
 
 
 def main():
@@ -171,6 +249,7 @@ def main():
 
         model = CachedConflictNet(
             embed_dim=args.embed_dim,
+            temporal_max_turns=args.temporal_max_turns,
             use_speaker_norm=not args.no_speaker_norm,
             use_temporal=not args.no_temporal,
             use_cross_attn_injection=not args.no_cross_attn_injection,
@@ -187,6 +266,7 @@ def main():
         model = ConflictNet(
             audio_encoder_name=args.audio_encoder,
             embed_dim=args.embed_dim,
+            temporal_max_turns=args.temporal_max_turns,
             use_speaker_norm=not args.no_speaker_norm,
             use_temporal=not args.no_temporal,
             use_cross_attn_injection=not args.no_cross_attn_injection,
@@ -281,49 +361,12 @@ def main():
 
         from data.augmentation import AudioAugmentor
 
+        from data.datasets import load_prosody_lookups
+
         prosody_lookup_train = None
         prosody_lookup_val = None
         if args.prosody_stats:
-            prosody_path = Path(args.prosody_stats)
-            # Load separate train/val z-score files (fixes L2 data leakage)
-            train_zscores_p = prosody_path.with_suffix(".train.zscores.json")
-            val_zscores_p = prosody_path.with_suffix(".val.zscores.json")
-            
-            # Fallback to old single file for backward compatibility
-            old_zscores_p = prosody_path.with_suffix(".zscores.json")
-            if not train_zscores_p.exists() and old_zscores_p.exists():
-                train_zscores_p = old_zscores_p
-                logger.warning("[Prosody] Using legacy combined z-scores file (train=val)")
-            if not val_zscores_p.exists() and old_zscores_p.exists():
-                val_zscores_p = old_zscores_p
-            
-            if train_zscores_p.exists():
-                try:
-                    with open(train_zscores_p) as f:
-                        raw = json.load(f)
-                    prosody_lookup_train = {k: torch.tensor(v) for k, v in raw.items()}
-                    if not prosody_lookup_train:
-                        prosody_lookup_train = None
-                    else:
-                        logger.info(f"[Prosody] loaded {len(prosody_lookup_train)} TRAIN z-score entries from {train_zscores_p}")
-                except Exception as e:
-                    logger.warning(f"[Prosody] failed to load {train_zscores_p}: {e}")
-            else:
-                logger.warning(f"[Prosody] train lookup file not found: {train_zscores_p}")
-                
-            if val_zscores_p.exists():
-                try:
-                    with open(val_zscores_p) as f:
-                        raw = json.load(f)
-                    prosody_lookup_val = {k: torch.tensor(v) for k, v in raw.items()}
-                    if not prosody_lookup_val:
-                        prosody_lookup_val = None
-                    else:
-                        logger.info(f"[Prosody] loaded {len(prosody_lookup_val)} VAL z-score entries from {val_zscores_p}")
-                except Exception as e:
-                    logger.warning(f"[Prosody] failed to load {val_zscores_p}: {e}")
-            else:
-                logger.warning(f"[Prosody] val lookup file not found: {val_zscores_p}")
+            prosody_lookup_train, prosody_lookup_val, _ = load_prosody_lookups(args.prosody_stats)
 
         augmentor = AudioAugmentor(
             sample_rate=16000,
@@ -334,23 +377,23 @@ def main():
 
         train_datasets = []
         val_datasets = []
+        tok_kwargs = {"tokenizer_name": args.tokenizer_path} if args.tokenizer_path else {}
 
         if args.iemocap_root:
-            train_datasets.append(IEMOCAPDataset(args.iemocap_root, sessions=[1, 2, 3, 4]))
-            val_datasets.append(IEMOCAPDataset(args.iemocap_root, sessions=[5]))
+            train_datasets.append(IEMOCAPDataset(args.iemocap_root, sessions=[1, 2, 3, 4], **tok_kwargs))
+            val_datasets.append(IEMOCAPDataset(args.iemocap_root, sessions=[5], **tok_kwargs))
 
         if args.mustard_root:
-            train_datasets.append(MUStARDDataset(args.mustard_root, split="train"))
-            val_datasets.append(MUStARDDataset(args.mustard_root, split="val"))
+            train_datasets.append(MUStARDDataset(args.mustard_root, split="train", **tok_kwargs))
+            val_datasets.append(MUStARDDataset(args.mustard_root, split="val", **tok_kwargs))
 
         if args.cremad_root:
-            tok_kwargs = {"tokenizer_name": args.tokenizer_path} if args.tokenizer_path else {}
             train_datasets.append(CREMADDataset(args.cremad_root, split="train", **tok_kwargs))
             val_datasets.append(CREMADDataset(args.cremad_root, split="val", **tok_kwargs))
 
         if args.meld_root:
-            train_datasets.append(MELDDataset(args.meld_root, split="train"))
-            val_datasets.append(MELDDataset(args.meld_root, split="val"))
+            train_datasets.append(MELDDataset(args.meld_root, split="train", **tok_kwargs))
+            val_datasets.append(MELDDataset(args.meld_root, split="val", **tok_kwargs))
 
         if not train_datasets:
             raise ValueError("Provide at least one of --iemocap_root, --mustard_root, --cremad_root, or --meld_root")
@@ -375,7 +418,27 @@ def main():
         # Dataset scans are dialogue ordered; random shuffling can make later
         # turns visible as context for earlier turns.
         temporal_context_enabled = not args.no_temporal
-        train_loader = DataLoader(train_set, shuffle=not temporal_context_enabled, **loader_kwargs)
+        if args.curriculum:
+            if not args.difficulties:
+                raise ValueError("--curriculum requires --difficulties (see scripts/compute_difficulties.py)")
+            from training.curriculum import CurriculumSampler
+
+            with open(args.difficulties) as f:
+                diff_map = json.load(f)
+            # compute_difficulties.py keys by global train-set index; order must match
+            difficulties = [float(diff_map[str(i)]) for i in range(len(train_set))]
+            sampler = CurriculumSampler(
+                difficulties,
+                max_epochs=args.epochs,
+                warmup_epochs=args.curriculum_warmup_epochs,
+                shuffle=not temporal_context_enabled,
+                seed=args.seed,
+            )
+            train_loader = DataLoader(train_set, sampler=sampler, **loader_kwargs)
+            logger.info(f"[Curriculum] Enabled with {len(difficulties)} difficulty scores "
+                        f"(warmup {args.curriculum_warmup_epochs} epochs)")
+        else:
+            train_loader = DataLoader(train_set, shuffle=not temporal_context_enabled, **loader_kwargs)
         if temporal_context_enabled:
             logger.info("Temporal context enabled: training in sequential dialogue order")
         loader_kwargs["collate_fn"] = val_collate
@@ -402,7 +465,15 @@ def main():
         start_epoch = trainer.load_checkpoint(args.resume_from)
 
     retries = 0
+    if args.max_retries > 0 and args.target_f1 > 0:
+        logger.warning(
+            "[Retry] --target_f1/--max_retries re-trains until a VAL-F1 target is hit. "
+            "This is validation-set hill-climbing: every attempt is recorded in "
+            "best_model_meta.json (retry_attempts) and must be disclosed alongside "
+            "any reported number. Never loop this against a test set."
+        )
     while True:
+        trainer.retry_attempts = retries
         trainer.train(n_epochs=args.epochs, pretrain_epochs=args.pretrain_epochs, start_epoch=start_epoch)
 
         if args.max_retries <= 0 or args.target_f1 <= 0:

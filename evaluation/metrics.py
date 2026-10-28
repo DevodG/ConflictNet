@@ -12,6 +12,7 @@ All metrics returned as a flat dict for easy WandB/logging consumption.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional, Any
 
 import numpy as np
@@ -26,13 +27,18 @@ from sklearn.metrics import (  # type: ignore
 )
 
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_TYPE_NAMES = ["sarcasm", "suppression", "deception"]
+
+
 def compute_all_metrics(
     probs_type: np.ndarray,         # (N, n_types) — sigmoid probabilities
     labels_type: np.ndarray,        # (N, n_types) — multi-hot ground truth
     severity_pred: Optional[np.ndarray] = None,  # (N,)
     severity_true: Optional[np.ndarray] = None,  # (N,)
     type_threshold: float = 0.5,
-    type_names: List[str] = ["sarcasm", "suppression", "deception"],
+    type_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Compute all evaluation metrics.
 
@@ -45,9 +51,14 @@ def compute_all_metrics(
         type_names: Names of the conflict subtypes.
 
     Returns:
-        Dict of metric_name → float value.
+        Dict of metric_name → value. ``empty_classes`` lists subtypes with
+        zero positive labels — their per-type F1/AP/AUC are degenerate and
+        the macro average over them is NOT comparable to a full 3-type
+        macro-F1 (a missing class caps the ceiling below 1.0).
     """
-    metrics = {}
+    if type_names is None:
+        type_names = DEFAULT_TYPE_NAMES
+    metrics: Dict[str, Any] = {}
     n_types = probs_type.shape[1]
 
     # Binary predictions via threshold
@@ -59,11 +70,14 @@ def compute_all_metrics(
     metrics["macro_recall"] = recall_score(labels_type, preds_type, average="macro", zero_division=0)
 
     # Per-type metrics
+    empty_classes = []
     for i, name in enumerate(type_names[:n_types]):
         p = probs_type[:, i]
         y = labels_type[:, i]
         pred = preds_type[:, i]
 
+        if y.sum() == 0:
+            empty_classes.append(name)
         metrics[f"f1_{name}"] = f1_score(y, pred, zero_division=0)
         metrics[f"precision_{name}"] = precision_score(y, pred, zero_division=0)
         metrics[f"recall_{name}"] = recall_score(y, pred, zero_division=0)
@@ -73,6 +87,14 @@ def compute_all_metrics(
                 metrics[f"auc_{name}"] = roc_auc_score(y, p)
             except ValueError:
                 metrics[f"auc_{name}"] = float("nan")
+    metrics["empty_classes"] = empty_classes
+    if empty_classes:
+        logger.warning(
+            "[Metrics] Empty classes (zero positives): %s — per-type F1/AP/AUC "
+            "for these are degenerate and macro-F1 is capped at %.3f, NOT "
+            "comparable to a full %d-type macro-F1",
+            empty_classes, (n_types - len(empty_classes)) / n_types, n_types,
+        )
 
     # Binary conflict flag (any type)
     conflict_pred = preds_type.any(axis=1).astype(int)
@@ -127,5 +149,8 @@ def print_metrics(metrics: Dict[str, Any], prefix: str = ""):
     print(title)
     print("=" * 50)
     for k, v in sorted(metrics.items()):
-        print(f"  {k:25s}: {v:.4f}")
+        if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool):
+            print(f"  {k:25s}: {float(v):.4f}")
+        else:
+            print(f"  {k:25s}: {v}")
     print("=" * 50 + "\n")

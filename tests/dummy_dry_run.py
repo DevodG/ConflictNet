@@ -212,8 +212,8 @@ def test_speaker_adaptive_threshold_variation():
     offset_e = sat(expressive_spk).item()
     offset_m = sat(monotone_spk).item()
 
-    assert 0 <= offset_e <= 0.3
-    assert 0 <= offset_m <= 0.3
+    assert -0.3 <= offset_e <= 0.3
+    assert -0.3 <= offset_m <= 0.3
     print("  [PASS] SpeakerAdaptiveThreshold produces different offsets")
     print(f"         expressive offset: {offset_e:.4f}, monotone offset: {offset_m:.4f}")
 

@@ -38,6 +38,8 @@ def parse_args():
     p.add_argument("--iemocap_root", type=str, default=None)
     p.add_argument("--mustard_root", type=str, default=None)
     p.add_argument("--case_root", type=str, default=None, help="CASE 2026 benchmark root")
+    p.add_argument("--cremad_root", type=str, default=None)
+    p.add_argument("--meld_root", type=str, default=None)
     p.add_argument("--num_workers", type=int, default=2,
                    help="DataLoader worker processes")
     p.add_argument("--prefetch_factor", type=int, default=2,
@@ -47,6 +49,8 @@ def parse_args():
     p.add_argument("--fairness", action="store_true", help="Run fairness audit")
     p.add_argument("--attribution", action="store_true", help="Compute IG attribution")
     p.add_argument("--llm_baseline", action="store_true", help="Run GPT-4o text baseline")
+    p.add_argument("--llm_max_samples", type=int, default=200,
+                   help="Max eval samples for the LLM baseline (cost bound)")
     p.add_argument("--ood_probe", action="store_true", help="Run speaker-OOD probe")
     p.add_argument("--held_out_speakers", type=str, default=None,
                    help="Comma-separated held-out speaker IDs for OOD probe")
@@ -71,25 +75,22 @@ def main():
     model, _ = load_conflictnet_model(checkpoint_path, device=args.device)
     logger.info(f"[Eval] Loaded checkpoint from {args.checkpoint}")
 
-    # Load pre-computed prosody z-scores if available
+    # Load pre-computed prosody z-scores if available (VAL split only — eval must
+    # never consume train-normalised or combined statistics).
+    from data.datasets import load_prosody_lookups
+
     prosody_lookup = None
     if args.prosody_stats:
-        prosody_path = Path(args.prosody_stats)
-        zscores_p = prosody_path.parent / f"{prosody_path.stem}.zscores.json"
-        if not zscores_p.exists():
-            zscores_p = prosody_path.with_suffix(".zscores.json")
-        if zscores_p.exists():
-            try:
-                with open(zscores_p) as f:
-                    raw = json.load(f)
-                prosody_lookup = {k: torch.tensor(v) for k, v in raw.items()}
-                if prosody_lookup:
-                    logger.info(f"[Prosody] loaded {len(prosody_lookup)} z-score entries from {zscores_p}")
-            except Exception as e:
-                logger.warning(f"[Prosody] failed to load {zscores_p}: {e}")
+        _, prosody_lookup, used_legacy = load_prosody_lookups(args.prosody_stats)
+        if used_legacy:
+            logger.warning("[Eval] REFUSING legacy combined z-scores for reported metrics")
+            prosody_lookup = None
 
     # --- Build eval dataset ---
-    from data.datasets import IEMOCAPDataset, MUStARDDataset, CASEDataset, make_collate_fn
+    from data.datasets import (
+        IEMOCAPDataset, MUStARDDataset, CASEDataset, CREMADDataset, MELDDataset,
+        make_collate_fn,
+    )
 
     eval_datasets = []
     if args.iemocap_root:
@@ -98,9 +99,16 @@ def main():
         eval_datasets.append(MUStARDDataset(args.mustard_root, split="val"))
     if args.case_root:
         eval_datasets.append(CASEDataset(args.case_root, split="val"))
+    if args.cremad_root:
+        eval_datasets.append(CREMADDataset(args.cremad_root, split="val"))
+    if args.meld_root:
+        eval_datasets.append(MELDDataset(args.meld_root, split="val"))
 
     if not eval_datasets:
-        raise ValueError("Provide at least one of --iemocap_root, --mustard_root, or --case_root")
+        raise ValueError(
+            "Provide at least one of --iemocap_root, --mustard_root, --case_root, "
+            "--cremad_root, or --meld_root"
+        )
 
     eval_set = ConcatDataset(eval_datasets)
     pin = supports_pin_memory(args.device)
@@ -211,8 +219,23 @@ def main():
         if not os.environ.get("OPENAI_API_KEY"):
             logger.warning("[LLM Baseline] OPENAI_API_KEY not set, skipping")
         else:
-            # Requires test items with 'text' field — skipping here without data
-            logger.info("[LLM Baseline] Set up test_items list with 'text' field and call run_llm_baseline()")
+            from evaluation.llm_baseline import run_llm_baseline
+
+            n_llm = len(eval_set) if args.llm_max_samples < 0 else min(len(eval_set), args.llm_max_samples)
+            test_items = []
+            for i in range(n_llm):
+                sample = eval_set[i]
+                test_items.append({
+                    "text": sample["text"],
+                    "conflict_binary": int(sample["conflict_binary"]),
+                    "conflict_type_labels": sample["conflict_type_labels"].tolist(),
+                })
+            llm_report = run_llm_baseline(
+                test_items, str(out_dir / "llm_baseline.json"), max_samples=n_llm,
+            )
+            llm_f1 = llm_report.get("metrics", {}).get("binary_f1", float("nan"))
+            logger.info(f"[LLM Baseline] binary_f1={llm_f1:.4f} "
+                        f"→ {out_dir / 'llm_baseline.json'}")
 
     # --- Speaker-OOD probe ---
     if args.ood_probe:
@@ -236,6 +259,12 @@ def main():
                 ood_cmd.extend(["--mustard_root", args.mustard_root])
             if args.case_root:
                 ood_cmd.extend(["--case_root", args.case_root])
+            if args.cremad_root:
+                ood_cmd.extend(["--cremad_root", args.cremad_root])
+            if args.meld_root:
+                ood_cmd.extend(["--meld_root", args.meld_root])
+            if args.prosody_stats:
+                ood_cmd.extend(["--prosody_stats", args.prosody_stats])
             try:
                 subprocess.run(ood_cmd, check=True, capture_output=True, text=True)
                 logger.info(f"[OOD-Probe] Report saved to {out_dir / 'ood' / 'ood_probe.json'}")

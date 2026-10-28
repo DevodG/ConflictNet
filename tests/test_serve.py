@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import base64
-import tempfile
 
 import pytest
 
@@ -152,6 +151,18 @@ class TestServeApiHelpers:
         with pytest.raises(HTTPException, match="Invalid JSON"):
             _parse_optional_json("not valid json{{{")
 
+    def test_websocket_route_registered(self):
+        from serve.api import create_app
+        from serve.config import ServeConfig
+
+        cfg = ServeConfig(checkpoint_path="/tmp/nonexistent.safetensors", device="cpu")
+        app = create_app(cfg)
+        paths = sorted({getattr(r, "path", "") for r in app.routes})
+        assert "/health" in paths
+        assert "/predict" in paths
+        assert "/predict_batch" in paths
+        assert "/ws" in paths
+
 
 class TestServeModel:
     """Tests for ServeModel — mocking to avoid GPU/model dependency."""
@@ -243,16 +254,10 @@ class TestServeModel:
 def io_wave(waveform, sample_rate):
     """Write a torch tensor to a WAV BytesIO buffer."""
     import io
-    import torchaudio
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        torchaudio.save(tmp_path, waveform, sample_rate)
-        with open(tmp_path, "rb") as f:
-            buf = io.BytesIO(f.read())
-        buf.seek(0)
-        return buf
-    finally:
-        import os
-        os.unlink(tmp_path)
+    from data.audio_io import write_wav
+
+    buf = io.BytesIO()
+    write_wav(buf, waveform, sample_rate)
+    buf.seek(0)
+    return buf

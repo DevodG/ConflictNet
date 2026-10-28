@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import base64
 
 import pytest
 
@@ -95,8 +95,8 @@ class TestServeSchemas:
     def test_batch_request_validation(self):
         from serve.schemas import PredictBatchRequest, BatchItem
         r = PredictBatchRequest(items=[
-            BatchItem(audio=b"wav", text="hello"),
-            BatchItem(audio=b"wav2", text="world", prosody_z=[1.0, 0.5, -0.3]),
+            BatchItem(audio=base64.b64encode(b"wav").decode(), text="hello"),
+            BatchItem(audio=base64.b64encode(b"wav2").decode(), text="world", prosody_z=[1.0, 0.5, -0.3]),
         ])
         assert len(r.items) == 2
         assert r.items[0].text == "hello"
@@ -110,7 +110,7 @@ class TestServeSchemas:
     def test_batch_request_max_length(self):
         from serve.schemas import PredictBatchRequest, BatchItem
         with pytest.raises(Exception):
-            PredictBatchRequest(items=[BatchItem(audio=b"x", text="x")] * 65)
+            PredictBatchRequest(items=[BatchItem(audio="eA==", text="x")] * 65)
 
     def test_severity_bounds(self):
         from serve.schemas import PredictResponse
@@ -150,6 +150,18 @@ class TestServeApiHelpers:
         from fastapi import HTTPException
         with pytest.raises(HTTPException, match="Invalid JSON"):
             _parse_optional_json("not valid json{{{")
+
+    def test_websocket_route_registered(self):
+        from serve.api import create_app
+        from serve.config import ServeConfig
+
+        cfg = ServeConfig(checkpoint_path="/tmp/nonexistent.safetensors", device="cpu")
+        app = create_app(cfg)
+        paths = sorted({getattr(r, "path", "") for r in app.routes})
+        assert "/health" in paths
+        assert "/predict" in paths
+        assert "/predict_batch" in paths
+        assert "/ws" in paths
 
 
 class TestServeModel:
@@ -242,16 +254,10 @@ class TestServeModel:
 def io_wave(waveform, sample_rate):
     """Write a torch tensor to a WAV BytesIO buffer."""
     import io
-    import torchaudio
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        torchaudio.save(tmp_path, waveform, sample_rate)
-        with open(tmp_path, "rb") as f:
-            buf = io.BytesIO(f.read())
-        buf.seek(0)
-        return buf
-    finally:
-        import os
-        os.unlink(tmp_path)
+    from data.audio_io import write_wav
+
+    buf = io.BytesIO()
+    write_wav(buf, waveform, sample_rate)
+    buf.seek(0)
+    return buf
