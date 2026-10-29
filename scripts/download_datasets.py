@@ -8,11 +8,9 @@ Handles:
   - IEMOCAP: skip (requires USC license)
 """
 
-import os
 import sys
 import shutil
 import subprocess
-import zipfile
 import tarfile
 import logging
 from pathlib import Path
@@ -250,53 +248,74 @@ def check_iemocap():
     return False
 
 
-def main():
+def parse_args(argv=None):
+    import argparse
+
+    p = argparse.ArgumentParser(description="Download missing ConflictNet datasets")
+    p.add_argument("--datasets", type=str, default="cremad,mustard,meld,iemocap",
+                   help="Comma-separated subset: cremad, mustard, meld, iemocap")
+    p.add_argument("--data_root", type=str, default=None,
+                   help="Override the DATA_ROOT download directory")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.data_root:
+        global DATA_ROOT
+        DATA_ROOT = Path(args.data_root)
+    wanted = {d.strip().lower() for d in args.datasets.split(",")}
+
     logger.info("=" * 60)
     logger.info("ConflictNet Dataset Downloader")
     logger.info("=" * 60)
     logger.info(f"Data root: {DATA_ROOT}")
     print()
-    
+
     results = {}
-    
+
     # 1. CREMA-D
-    logger.info("-" * 40)
-    logger.info("1/4: CREMA-D")
-    if check_cremad():
-        results["CREMA-D"] = "✅ Ready"
-    else:
-        if download_cremad_kaggle():
-            results["CREMA-D"] = "✅ Downloaded"
+    if "cremad" in wanted:
+        logger.info("-" * 40)
+        logger.info("1/4: CREMA-D")
+        if check_cremad():
+            results["CREMA-D"] = "✅ Ready"
         else:
-            results["CREMA-D"] = "❌ Failed"
-    print()
-    
+            if download_cremad_kaggle():
+                results["CREMA-D"] = "✅ Downloaded"
+            else:
+                results["CREMA-D"] = "❌ Failed"
+        print()
+
     # 2. MUStARD++
-    logger.info("-" * 40)
-    logger.info("2/4: MUStARD++ Audio")
-    if download_mustard_audio():
-        results["MUStARD++"] = "✅ Ready"
-    else:
-        results["MUStARD++"] = "⚠️ Manual download needed"
-    print()
-    
+    if "mustard" in wanted:
+        logger.info("-" * 40)
+        logger.info("2/4: MUStARD++ Audio")
+        if download_mustard_audio():
+            results["MUStARD++"] = "✅ Ready"
+        else:
+            results["MUStARD++"] = "⚠️ Manual download needed"
+        print()
+
     # 3. MELD
-    logger.info("-" * 40)
-    logger.info("3/4: MELD")
-    if download_meld():
-        results["MELD"] = "✅ Ready"
-    else:
-        results["MELD"] = "❌ Failed"
-    print()
-    
+    if "meld" in wanted:
+        logger.info("-" * 40)
+        logger.info("3/4: MELD")
+        if download_meld():
+            results["MELD"] = "✅ Ready"
+        else:
+            results["MELD"] = "❌ Failed"
+        print()
+
     # 4. IEMOCAP
-    logger.info("-" * 40)
-    logger.info("4/4: IEMOCAP")
-    if check_iemocap():
-        results["IEMOCAP"] = "✅ Ready"
-    else:
-        results["IEMOCAP"] = "⚠️ Requires USC license"
-    print()
+    if "iemocap" in wanted:
+        logger.info("-" * 40)
+        logger.info("4/4: IEMOCAP")
+        if check_iemocap():
+            results["IEMOCAP"] = "✅ Ready"
+        else:
+            results["IEMOCAP"] = "⚠️ Requires USC license"
+        print()
     
     # Summary
     logger.info("=" * 60)
@@ -306,12 +325,15 @@ def main():
         logger.info(f"  {name:15s} {status}")
     
     ready_count = sum(1 for v in results.values() if "✅" in v)
-    logger.info(f"\n  {ready_count}/4 datasets ready for training")
-    
+    logger.info(f"\n  {ready_count}/{len(results)} datasets ready for training")
+
+    # Training can proceed with 2+ datasets (IEMOCAP is license-gated and
+    # usually absent); for smaller subsets require all of them.
+    required = min(2, len(results))
     if ready_count >= 2:
         logger.info("  You can start training with the available datasets!")
-    
-    return 0 if ready_count >= 2 else 1
+
+    return 0 if ready_count >= required else 1
 
 
 if __name__ == "__main__":

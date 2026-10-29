@@ -53,7 +53,8 @@ python scripts/evaluate.py \
   --checkpoint checkpoints/full_run1/best_model.safetensors \
   --mustard_root data/mustard --iemocap_root data/iemocap \
   --prosody_stats prosody_stats.json \
-  --fairness --calibration --ood --output_dir results/full_run1
+  --fairness --ood_probe --dump_npz results/full_run1/model.npz \
+  --output_dir results/full_run1
 ```
 
 ## 4. Statistics (required for every paper number)
@@ -67,8 +68,10 @@ python scripts/stats.py --npz results/full_run1/model.npz --metric macro_f1 \
 ## 5. Ablations
 
 ```bash
-python scripts/ablate.py --config configs/ablate_no_speaker_norm.yaml --output_dir runs/abl1
-python scripts/ablation_table.py runs/  # reads metrics.json per run
+python scripts/ablate.py --config_dir configs --iemocap_root data/iemocap \
+  --mustard_root data/mustard --output_dir runs/abl1
+python scripts/ablation_table.py --runs full,no_speaker_norm \
+  --checkpoints_dir checkpoints --output ablation_table.tex
 ```
 
 ## Honesty gates (enforced in code — do not bypass)

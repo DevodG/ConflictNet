@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -137,7 +136,7 @@ def main():
         all_severity = torch.cat(all_severity, 0)
     
     # Compute metrics
-    from sklearn.metrics import f1_score, accuracy_score, roc_auc_score
+    from sklearn.metrics import f1_score
     
     # Binary conflict F1
     binary_f1 = f1_score(all_labels_binary.numpy(), all_conflict_flag.numpy())

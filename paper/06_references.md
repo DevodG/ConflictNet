@@ -68,15 +68,28 @@ drafts must be updated before submission.
   intro §1): NOT VERIFIED. Either confirm exact papers or drop the sentence
   and argue from our own ablations.
 
-## SOTA anchors (what "good" looks like — scoping our claims)
+## SOTA anchors (verified Oct 29 2026 — scoping our claims)
 
-- Multimodal sarcasm (MUStARD/MUStARD++): ~70–72% F1 (Ray et al.; best
-  reported fusion numbers). PodSarc speech-only: 73.63% F1 (Li et al. 2026).
-- IEMOCAP 4-class emotion: multimodal ~74% WAcc (concept-bottleneck,
-  arXiv:2609.39453, Sep 2026); audio+text fusion typically 69–74%.
+- MUStARD: F1 77.6 (Aggarwal et al. 2023, via Farabi survey Table 4).
+  Castro 71.6 is stale. A 2026 "94%" claim exists but admits possible
+  speaker leakage — cite-and-discount, never as SOTA.
+- MUStARD++: F1 75.3 audio-only (ProSarc 2026, arXiv:2606.06168,
+  FC-confirmed). Tiwari 73.3 / Bhosale 73.1 stale; Raghuvanshi 74.96
+  (ICASSP 2025) second.
+- MELD: WF1 70.06 text-only (DiaRelay 2026, Qwen3-8B + 7.1M adapter,
+  verified from primary Table 2). GraphSmile 66.71 stale. MELD is
+  dialogue-eval only for us — do NOT SOTA-chase.
+- CMU-MOSEI: Acc2 86.31 (MMoLRE 2025); MulT 82.5 stale.
+- IEMOCAP-4 classic SER audio-only: WA 71.79 (emotion2vec, 5-fold LOSO).
+- PodSarc A+T: F1 73.63 (Li et al. 2025).
+- DOLOS deception fusion: ACC 80.56 / AUC 85.80 (ReDA 2026); audio alone
+  ~60 — probe-only for us.
 - Implication: a 95+ macro-F1 claim is defensible ONLY on narrow binary
   acted-emotion proxies (e.g. CREMA-D anger-vs-neutral, speaker-disjoint),
   never on genuine 3-type conflict labels. See paper/04_results.md protocol.
+- Full per-paper tracker: paper/literature_tracker.xlsx (118 papers,
+  114 USE / 4 SKIP, 24 fact-checks). Grand verdict: Interspeech 2027,
+  1-type sarcasm, speaker-invariance + honesty leads.
 
 ## Survey (read first for related work)
 
