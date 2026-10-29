@@ -159,6 +159,10 @@ def parse_args(argv=None):
                    help="Additional epochs per retry")
     p.add_argument("--dry_run", action="store_true",
                    help="Run 1 batch through validation, report shapes/memory, then exit")
+    p.add_argument("--allow_fallback_encoders", action="store_true",
+                   help="Allow training when a pretrained encoder failed to load and a "
+                        "random-init fallback was substituted (default: refuse). "
+                        "Fallback runs produce meaningless numbers — never report them.")
     p.add_argument("--use_cached", action="store_true",
                    help="Train on pre-computed encoder embeddings (bypass WavLM + DeBERTa)")
     p.add_argument("--cache_path", type=str, default="cached_embeddings/embeddings.pt",
@@ -176,6 +180,27 @@ def parse_args(argv=None):
                    help="Curriculum warmup epochs (easy-only phase)")
     _apply_yaml_config(p, argv)
     return p.parse_args(argv)
+
+
+def refuse_fallback_encoders(model) -> None:
+    """Raise SystemExit if the model contains random-init fallback encoders.
+
+    Both encoder factories silently substitute a randomly-initialized
+    fallback when the pretrained download fails (no network / full disk).
+    Training on one produces meaningless numbers, so real runs must fail
+    closed here instead of silently degrading.
+    """
+    from models.encoders.audio import _SpectrogramEncoder
+    from models.encoders.text import _TextFallbackEncoder
+    fallbacks = [type(m).__name__ for m in model.modules()
+                 if isinstance(m, (_SpectrogramEncoder, _TextFallbackEncoder))]
+    if fallbacks:
+        raise SystemExit(
+            "REFUSING to train: pretrained encoder download failed and "
+            f"random-init fallback(s) {sorted(set(fallbacks))} were substituted. "
+            "Free disk space / restore network so HuggingFace weights load, "
+            "or pass --allow_fallback_encoders for an explicitly-marked smoke run."
+        )
 
 
 def main():
@@ -278,6 +303,12 @@ def main():
             label_smoothing=args.label_smoothing,
             separation_lambda=args.separation_lambda,
         )
+
+    # Fail closed on silent random-init encoder fallbacks: a run trained on
+    # fallback encoders produces meaningless numbers, so refuse unless the
+    # user explicitly allows it (e.g. offline smoke tests).
+    if not args.allow_fallback_encoders and not args.use_cached:
+        refuse_fallback_encoders(model)
 
     param_counts = model.count_parameters()
     total_trainable = sum(v["trainable"] for v in param_counts.values())

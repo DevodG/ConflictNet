@@ -353,3 +353,39 @@ class TestAdaptiveThreshold:
         off_e = sat(torch.ones(1, 8)).item()
         off_m = sat(-torch.ones(1, 8)).item()
         assert off_e != off_m
+
+
+class TestFailClosedEncoders:
+    """Training must refuse silent random-init encoder fallbacks."""
+
+    def test_refuses_text_fallback(self):
+        import pytest
+
+        from models.encoders.text import _TextFallbackEncoder
+        from scripts.train import refuse_fallback_encoders
+
+        model = torch.nn.Sequential(_TextFallbackEncoder(vocab_size=128, embed_dim=16))
+        with pytest.raises(SystemExit, match="REFUSING"):
+            refuse_fallback_encoders(model)
+
+    def test_refuses_spectrogram_fallback(self):
+        import pytest
+
+        from models.encoders.audio import _SpectrogramEncoder
+        from scripts.train import refuse_fallback_encoders
+
+        model = torch.nn.Sequential(_SpectrogramEncoder(output_dim=16))
+        with pytest.raises(SystemExit, match="REFUSING"):
+            refuse_fallback_encoders(model)
+
+    def test_allows_clean_model(self):
+        from scripts.train import refuse_fallback_encoders
+
+        model = torch.nn.Sequential(torch.nn.Linear(8, 4), torch.nn.Linear(4, 2))
+        assert refuse_fallback_encoders(model) is None
+
+    def test_allow_flag_defaults_off(self):
+        from scripts.train import parse_args
+
+        assert parse_args([]).allow_fallback_encoders is False
+        assert parse_args(["--allow_fallback_encoders"]).allow_fallback_encoders is True

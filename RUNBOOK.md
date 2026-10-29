@@ -27,6 +27,11 @@ python scripts/compute_prosody_stats.py \
 
 ## 3a. Binary acted-emotion protocol (the 95+ headline scope)
 
+Mac (MPS): prefix training with `PYTORCH_ENABLE_MPS_FALLBACK=1` — one
+transformer masking op has no MPS kernel and must fall back to CPU.
+Training refuses to run on random-init fallback encoders unless
+`--allow_fallback_encoders` is passed (never report such runs).
+
 ```bash
 python scripts/train.py --config configs/default.yaml \
   --cremad_root data/cremad --iemocap_root data/iemocap \
